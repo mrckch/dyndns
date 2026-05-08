@@ -42,7 +42,19 @@ Beide LXCs hängen am selben Internetanschluss (gleiche WAN-IP). Der Failover ma
 - NameCheap-Domain mit aktiviertem Dynamic DNS (Advanced DNS → Dynamic DNS Record)
 - Für Failover: zwei LXCs, die sich gegenseitig per HTTP erreichen können
 
-## Schnellstart (Single-Mode)
+## Schnellstart auf Proxmox (empfohlen)
+
+Auf dem **Proxmox-Host** (als root) – erstellt einen LXC mit komfortablen Specs (1 vCPU, 256 MB RAM, 128 MB Swap, 4 GB Disk) und startet danach den DynDNS-Setup-Assistenten direkt im Container:
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/mrckch/dyndns/main/proxmox/create-lxc.sh)
+```
+
+Der Assistent fragt nur nach Rolle, IP-Adresse und Root-Passwort. Alles andere (VMID, Storage, Bridge, Template-Download, LXC-Erstellung, Repo-Klon, DynDNS-Setup) läuft automatisch.
+
+Für ein Master/Failover-Pärchen führst du das Skript einmal auf jedem Proxmox-Host aus und wählst dort die jeweilige Rolle.
+
+## Schnellstart manuell (Single-Mode)
 
 ```bash
 git clone https://github.com/mrckch/dyndns.git
@@ -52,7 +64,7 @@ sudo ./setup.sh
 
 Der Assistent fragt alles ab, was nötig ist. Wähle als Rolle **"Single"** für einen einzelnen Server ohne Backup.
 
-## Schnellstart (Master + Failover)
+## Schnellstart manuell (Master + Failover)
 
 ### Schritt 1: Master einrichten (LXC #1 auf Proxmox A)
 
