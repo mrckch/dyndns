@@ -1,0 +1,9 @@
+/var/log/dyndns/update.log /var/log/dyndns/heartbeat.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}

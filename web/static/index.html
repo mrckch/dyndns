@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DynDNS Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <div class="header-left">
+                <svg class="logo" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10A15.3 15.3 0 0 1 12 2z"/>
+                </svg>
+                <h1>DynDNS Dashboard</h1>
+                <span id="role-pill" class="role-pill">—</span>
+            </div>
+            <button id="btn-test" class="btn btn-primary" onclick="runTest()">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5 3 19 12 5 21 5 3"/>
+                </svg>
+                Jetzt testen
+            </button>
+        </div>
+    </header>
+
+    <main>
+        <!-- Status Card -->
+        <section class="card status-card">
+            <h2>Status</h2>
+            <div class="status-grid">
+                <div class="status-item">
+                    <span class="label">Domain</span>
+                    <span class="value" id="st-domain">—</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Host</span>
+                    <span class="value" id="st-host">—</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Aktuelle IP</span>
+                    <span class="value mono" id="st-ip">—</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Letztes Update</span>
+                    <span class="value" id="st-time">—</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Status</span>
+                    <span class="value"><span class="badge" id="st-badge">—</span></span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Timer</span>
+                    <span class="value" id="st-timer">—</span>
+                </div>
+            </div>
+            <div class="stats-row">
+                <div class="stat">
+                    <span class="stat-num" id="stat-total">0</span>
+                    <span class="stat-label">Gesamt</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-num stat-success" id="stat-ok">0</span>
+                    <span class="stat-label">Erfolgreich</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-num stat-failure" id="stat-fail">0</span>
+                    <span class="stat-label">Fehlgeschlagen</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Failover Card -->
+        <section class="card hidden" id="failover-card">
+            <h2>Failover</h2>
+            <div class="status-grid">
+                <div class="status-item">
+                    <span class="label">Eigene Rolle</span>
+                    <span class="value" id="fo-self-role">—</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Eigener Status</span>
+                    <span class="value"><span class="badge" id="fo-self-active">—</span></span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Peer (Partner)</span>
+                    <span class="value mono" id="fo-peer-url">—</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Peer-Status</span>
+                    <span class="value"><span class="badge" id="fo-peer-health">—</span></span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Letzter Heartbeat</span>
+                    <span class="value" id="fo-peer-seen">—</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Fehlversuche</span>
+                    <span class="value" id="fo-peer-fails">—</span>
+                </div>
+            </div>
+            <div id="fo-error" class="fo-error hidden"></div>
+            <div class="form-actions" style="justify-content: flex-start; gap: 0.5rem; flex-wrap: wrap;">
+                <button class="btn btn-sm" onclick="testPeer()">Peer jetzt prüfen</button>
+                <button class="btn btn-sm" id="fo-takeover-btn" onclick="forceTakeover()">Failover erzwingen</button>
+                <button class="btn btn-sm" id="fo-release-btn" onclick="releaseFailover()">Zurück zum Master</button>
+                <button class="btn btn-sm" onclick="rotateToken()">Token rotieren</button>
+            </div>
+        </section>
+
+        <!-- Toast -->
+        <div id="toast" class="toast hidden"></div>
+
+        <!-- History Card -->
+        <section class="card">
+            <div class="card-header">
+                <h2>Verlauf</h2>
+                <div class="pagination">
+                    <button class="btn btn-sm" id="btn-prev" onclick="prevPage()" disabled>&laquo; Zurück</button>
+                    <span id="page-info">—</span>
+                    <button class="btn btn-sm" id="btn-next" onclick="nextPage()" disabled>Weiter &raquo;</button>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Zeitpunkt</th>
+                            <th>Alte IP</th>
+                            <th>Neue IP</th>
+                            <th>Status</th>
+                            <th>Nachricht</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-body">
+                        <tr><td colspan="5" class="empty">Lade Daten...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Settings Card -->
+        <section class="card">
+            <button class="card-toggle" onclick="toggleSettings()">
+                <h2>Einstellungen</h2>
+                <svg id="settings-arrow" class="arrow" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"/>
+                </svg>
+            </button>
+            <div id="settings-body" class="settings-body hidden">
+
+                <div class="settings-section">
+                    <h3>DynDNS</h3>
+                    <form id="dyndns-form" onsubmit="saveDyndns(event)">
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="cfg-domain">Domain</label>
+                                <input type="text" id="cfg-domain" required pattern="[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}">
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-host">Host (@ = Root)</label>
+                                <input type="text" id="cfg-host" placeholder="@">
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-password">DynDNS-Passwort</label>
+                                <input type="password" id="cfg-password" placeholder="Unverändert lassen = ****">
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-interval">Intervall (Min.)</label>
+                                <input type="number" id="cfg-interval" min="1" max="60" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-node-name">Servername</label>
+                                <input type="text" id="cfg-node-name" placeholder="lxc-master-pve1">
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">DynDNS speichern</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="settings-section">
+                    <h3>Failover</h3>
+                    <form id="failover-form" onsubmit="saveFailover(event)">
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="cfg-role">Rolle</label>
+                                <select id="cfg-role">
+                                    <option value="single">Single (kein Backup)</option>
+                                    <option value="master">Master</option>
+                                    <option value="failover">Failover</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-peer-url">Peer-URL</label>
+                                <input type="text" id="cfg-peer-url" placeholder="http://10.0.0.21:8080">
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-peer-token">Peer-Token</label>
+                                <input type="password" id="cfg-peer-token" placeholder="Unverändert lassen = ****">
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-hb-interval">Heartbeat (Sek.)</label>
+                                <input type="number" id="cfg-hb-interval" min="10" max="300">
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-fo-threshold">Failover-Schwelle</label>
+                                <input type="number" id="cfg-fo-threshold" min="1" max="20">
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">Failover speichern</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="settings-section">
+                    <h3>Web-Auth</h3>
+                    <form id="auth-form" onsubmit="saveAuth(event)">
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label class="check-label">
+                                    <input type="checkbox" id="cfg-auth-enabled" onchange="toggleAuthFields()">
+                                    Passwort-Schutz aktivieren
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-auth-user">Benutzername</label>
+                                <input type="text" id="cfg-auth-user" placeholder="admin" disabled>
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-auth-password">Neues Passwort</label>
+                                <input type="password" id="cfg-auth-password" placeholder="Leer lassen = unverändert" disabled>
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">Web-Auth speichern</button>
+                        </div>
+                    </form>
+                </div>
+
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <span>DynDNS Updater für NameCheap</span>
+        <span>Auto-Refresh: 60s</span>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

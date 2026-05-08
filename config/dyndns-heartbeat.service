@@ -1,0 +1,8 @@
+[Unit]
+Description=DynDNS Failover Heartbeat (peer health check)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dyndns/heartbeat.sh

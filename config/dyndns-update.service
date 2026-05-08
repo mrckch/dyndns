@@ -1,0 +1,8 @@
+[Unit]
+Description=DynDNS IP Update for NameCheap
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dyndns/updater.sh
