@@ -37,7 +37,7 @@ Beide LXCs hängen am selben Internetanschluss (gleiche WAN-IP). Der Failover ma
 
 ## Voraussetzungen
 
-- Debian 12+ oder Ubuntu 22.04+ (LXC oder VM)
+- Debian 12 / 13 oder Ubuntu 22.04+ (LXC oder VM)
 - Root-Zugriff
 - NameCheap-Domain mit aktiviertem Dynamic DNS (Advanced DNS → Dynamic DNS Record)
 - Für Failover: zwei LXCs, die sich gegenseitig per HTTP erreichen können

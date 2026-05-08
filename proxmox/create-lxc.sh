@@ -52,7 +52,7 @@ fi
 
 # --- Welcome ---
 
-msg "DynDNS LXC Installer für Proxmox VE\n\nDieses Script erstellt einen unprivilegierten LXC-Container und installiert darin den DynDNS-Updater für NameCheap.\n\nVoreingestellt:\n  - $LXC_CORES vCPU, $LXC_MEMORY MB RAM, $LXC_SWAP MB Swap, $LXC_DISK GB Disk\n  - Debian 12 Standard, unprivileged, Auto-Start\n\nDu wirst nur nach dem Wesentlichen gefragt:\n  - Rolle (Master / Failover / Single)\n  - IP-Adresse\n  - Root-Passwort"
+msg "DynDNS LXC Installer für Proxmox VE\n\nDieses Script erstellt einen unprivilegierten LXC-Container und installiert darin den DynDNS-Updater für NameCheap.\n\nVoreingestellt:\n  - $LXC_CORES vCPU, $LXC_MEMORY MB RAM, $LXC_SWAP MB Swap, $LXC_DISK GB Disk\n  - Debian Standard (13 bevorzugt, 12 als Fallback), unprivileged, Auto-Start\n\nDu wirst nur nach dem Wesentlichen gefragt:\n  - Rolle (Master / Failover / Single)\n  - IP-Adresse\n  - Root-Passwort"
 
 # --- Role ---
 
@@ -166,20 +166,28 @@ done
 TPL_STORAGE=$(pvesm status -content vztmpl 2>/dev/null | awk 'NR>1 {print $1; exit}')
 [[ -z "$TPL_STORAGE" ]] && TPL_STORAGE="local"
 
-EXISTING=$(pvesm list "$TPL_STORAGE" 2>/dev/null | awk '/debian-12-standard.*\.tar\./ {print $1}' | sort -V | tail -1)
+# Prefer Debian 13, fall back to Debian 12
+EXISTING=$(pvesm list "$TPL_STORAGE" 2>/dev/null | awk '/debian-13-standard.*\.tar\./ {print $1}' | sort -V | tail -1)
+if [[ -z "$EXISTING" ]]; then
+    EXISTING=$(pvesm list "$TPL_STORAGE" 2>/dev/null | awk '/debian-12-standard.*\.tar\./ {print $1}' | sort -V | tail -1)
+fi
 
 if [[ -n "$EXISTING" ]]; then
     TEMPLATE_REF="$EXISTING"
     TEMPLATE_NAME=$(basename "${EXISTING#*:vztmpl/}")
 else
     echo
-    echo "Kein debian-12-standard Template gefunden, suche online..."
+    echo "Kein Debian-Standard-Template gefunden, suche online..."
     pveam update >/dev/null 2>&1 || true
     TEMPLATE_NAME=$(pveam available --section system 2>/dev/null \
-        | awk '/debian-12-standard/{print $2}' | sort -V | tail -1)
+        | awk '/debian-13-standard/{print $2}' | sort -V | tail -1)
+    if [[ -z "$TEMPLATE_NAME" ]]; then
+        TEMPLATE_NAME=$(pveam available --section system 2>/dev/null \
+            | awk '/debian-12-standard/{print $2}' | sort -V | tail -1)
+    fi
 
     if [[ -z "$TEMPLATE_NAME" ]]; then
-        msg "Konnte kein debian-12-standard Template finden.\n\nBitte manuell laden:\n  pveam update\n  pveam available --section system\n  pveam download $TPL_STORAGE <template-name>"
+        msg "Konnte kein debian-13-standard oder debian-12-standard Template finden.\n\nBitte manuell laden:\n  pveam update\n  pveam available --section system\n  pveam download $TPL_STORAGE <template-name>"
         exit 1
     fi
 
