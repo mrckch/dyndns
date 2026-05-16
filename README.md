@@ -6,9 +6,11 @@ Optional als **Master/Failover**-Pärchen über zwei LXCs auf zwei Proxmox-Hosts
 
 ## Features
 
+- **Mehrere Namecheap-Domains** mit jeweils mehreren Host-Records (`@`, `www`, `vpn`, …) komplett im Dashboard pflegen — anlegen, bearbeiten, löschen, einzeln aktivieren/deaktivieren
 - Update an NameCheap DynDNS API in einstellbarem Intervall (1–60 Min.)
 - IP-Auflösung über mehrere öffentliche Services (Fallback)
-- SQLite-basierte History (90 Tage Aufbewahrung)
+- Fehler bei einer Domain blockieren die anderen nicht (pro Eintrag eigener History-Status)
+- SQLite-basierte History (90 Tage Aufbewahrung), filterbar nach Domain
 - Web-Dashboard mit Status, Verlauf und Live-Test-Knopf
 - Optionales Web-Dashboard-Passwort (HTTP Digest Auth)
 - Failover-Modus: zwei Knoten überwachen sich gegenseitig per Heartbeat
@@ -104,9 +106,12 @@ Das Dashboard ist nach dem Setup unter `http://<lxc-ip>:8080` erreichbar (Port �
 
 | Bereich  | Was du ändern kannst |
 |---|---|
-| DynDNS   | Domain, Host, Passwort, Update-Intervall, Servername |
+| Domains  | Beliebig viele Namecheap-Domains anlegen/bearbeiten/löschen, pro Domain mehrere Hosts (`@`, `www`, ...), jeweils einzeln aktivierbar |
+| Allgemein| Update-Intervall, Servername |
 | Failover | Rolle, Peer-URL, Peer-Token, Heartbeat-Intervall, Failover-Schwelle |
 | Web-Auth | Passwort-Schutz aktivieren/deaktivieren, User/Passwort ändern |
+
+Pro Namecheap-Domain wird **ein** DynDNS-Passwort hinterlegt (das aus dem Namecheap-Dashboard unter *Advanced DNS → Dynamic DNS*). Darunter beliebig viele Host-Records. Ein einzelner Updater-Lauf holt die Public-IP einmal und aktualisiert alle aktiven Einträge. Schlägt einer fehl, laufen die übrigen trotzdem durch — der fehlerhafte Eintrag wird in der History markiert.
 
 Im **Failover-Bereich** zusätzlich:
 - Peer-Status live (Online/Offline, letzter Heartbeat, Fehlversuche)
@@ -135,7 +140,8 @@ Manuell erzwungene Übernahme (`force_active=1`) wird vom automatischen Mechanis
   web/cgi-bin/api.py          API (geschützt durch optionale Web-Auth)
   web/peer-cgi/heartbeat.py   Peer-Endpunkt (Token-geschützt, ohne Web-Auth)
 /etc/dyndns/
-  config.env                  Konfiguration
+  config.env                  Globale Konfiguration (Rolle, Intervall, Failover, Web-Auth)
+  domains.json                Liste aller Namecheap-Domains samt Hosts und Passwörtern
   htdigest                    Optionale Web-Auth-Datei
 /var/lib/dyndns/
   history.db                  SQLite-DB (Updates + Node-State)
@@ -150,9 +156,13 @@ Manuell erzwungene Übernahme (`force_active=1`) wird vom automatischen Mechanis
 /etc/logrotate.d/dyndns
 ```
 
+## Migration von einer Single-Domain-Installation
+
+Beim ersten Aufruf des Dashboards oder des `setup.sh` nach einem Update wird ein vorhandener `DYNDNS_DOMAIN`/`DYNDNS_HOST`/`DYNDNS_PASSWORD`-Eintrag aus `config.env` automatisch nach `/etc/dyndns/domains.json` migriert; die alten Keys werden anschließend aus `config.env` entfernt. Falls die History-Tabelle aus einer älteren Installation noch keine `domain`/`host`-Spalten hat, werden sie idempotent ergänzt. Alte History-Zeilen erscheinen im UI als „(legacy)".
+
 ## Sicherheit
 
-- Konfigurationsdatei (inkl. NameCheap-Passwort und Peer-Token) liegt unter `/etc/dyndns/config.env` mit `0640 root:www-data`.
+- Konfigurationsdateien (inkl. NameCheap-Passwörter in `domains.json` und Peer-Token in `config.env`) liegen unter `/etc/dyndns/` mit `0640 root:www-data`.
 - Heartbeat-Endpunkt (`/peer/heartbeat.py`) ist nur per geheimem Token erreichbar (Konstantzeit-Vergleich, `secrets.compare_digest`).
 - Web-Dashboard kann optional mit HTTP Digest Auth abgesichert werden.
 - Der Heartbeat-Pfad ist auch bei aktivierter Web-Auth ohne Browser-Login erreichbar (sonst könnte der Failover den Master nicht prüfen) – die Absicherung erfolgt allein über den Token.

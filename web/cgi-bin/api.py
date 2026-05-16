@@ -8,10 +8,13 @@ import time
 import re
 import secrets
 import hashlib
+import uuid
+import tempfile
 from urllib.parse import parse_qs
 
 CONFIG_FILE = "/etc/dyndns/config.env"
 CONFIG_DIR = "/etc/dyndns"
+DOMAINS_FILE = "/etc/dyndns/domains.json"
 DB_FILE = "/var/lib/dyndns/history.db"
 UPDATER_SCRIPT = "/opt/dyndns/updater.sh"
 HEARTBEAT_SCRIPT = "/opt/dyndns/heartbeat.sh"
@@ -21,6 +24,9 @@ RATE_LIMIT_FILE = "/tmp/dyndns-test-last"
 LIGHTTPD_CONF = "/etc/lighttpd/conf-available/90-dyndns.conf"
 HTDIGEST_FILE = "/etc/dyndns/htdigest"
 REALM = "DynDNS Dashboard"
+
+DOMAIN_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$")
+HOST_RE = re.compile(r"^[a-zA-Z0-9@._-]+$")
 
 PUBLIC_ACTIONS = {"heartbeat"}
 
@@ -59,6 +65,89 @@ def write_config(config):
         for key, val in config.items():
             f.write(f"{key}={val}\n")
     os.chmod(CONFIG_FILE, 0o640)
+
+
+def read_domains():
+    """Return the domains.json structure. Always returns a dict with a 'domains' list."""
+    try:
+        with open(DOMAINS_FILE) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"domains": []}
+    if not isinstance(data, dict) or not isinstance(data.get("domains"), list):
+        return {"domains": []}
+    return data
+
+
+def write_domains(data):
+    """Atomic write of domains.json."""
+    fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".domains.", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.chmod(tmp, 0o640)
+        try:
+            import grp
+            gid = grp.getgrnam("www-data").gr_gid
+            os.chown(tmp, 0, gid)
+        except Exception:
+            pass
+        os.replace(tmp, DOMAINS_FILE)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def ensure_domains_file():
+    """Migrate legacy single-domain config to domains.json on first run."""
+    if os.path.exists(DOMAINS_FILE):
+        return
+    config = read_config()
+    legacy_domain = config.get("DYNDNS_DOMAIN", "").strip()
+    legacy_host = config.get("DYNDNS_HOST", "@").strip() or "@"
+    legacy_pw = config.get("DYNDNS_PASSWORD", "").strip()
+    data = {"domains": []}
+    if legacy_domain and legacy_pw:
+        data["domains"].append({
+            "id": uuid.uuid4().hex,
+            "domain": legacy_domain,
+            "password": legacy_pw,
+            "enabled": True,
+            "hosts": [{"host": legacy_host, "enabled": True}],
+        })
+    write_domains(data)
+    # Drop legacy keys from config.env
+    for k in ("DYNDNS_DOMAIN", "DYNDNS_HOST", "DYNDNS_PASSWORD"):
+        config.pop(k, None)
+    write_config(config)
+
+
+def domains_for_ui(data):
+    """Mask passwords for outbound responses."""
+    out = []
+    for d in data.get("domains", []):
+        out.append({
+            "id": d.get("id", ""),
+            "domain": d.get("domain", ""),
+            "password_set": bool(d.get("password")),
+            "enabled": bool(d.get("enabled", True)),
+            "hosts": [
+                {"host": h.get("host", "@"), "enabled": bool(h.get("enabled", True))}
+                for h in d.get("hosts", [])
+            ],
+        })
+    return out
+
+
+def validate_host_name(h):
+    h = (h or "").strip()
+    if not h:
+        return "@"
+    if not HOST_RE.match(h):
+        return None
+    return h
 
 
 def check_auth(config, action):
@@ -146,9 +235,15 @@ def handle_status():
     if role == "failover":
         is_active = state.get("is_active", "0") or "0"
 
+    domains_data = read_domains()
+    domains_total = len(domains_data["domains"])
+    domains_enabled = sum(1 for d in domains_data["domains"] if d.get("enabled", True))
+    hosts_enabled = sum(
+        sum(1 for h in d.get("hosts", []) if h.get("enabled", True))
+        for d in domains_data["domains"] if d.get("enabled", True)
+    )
+
     respond("200 OK", {
-        "domain": config.get("DYNDNS_DOMAIN", ""),
-        "host": config.get("DYNDNS_HOST", "@"),
         "interval": config.get("DYNDNS_INTERVAL", "5"),
         "current_ip": dict(last)["new_ip"] if last else "",
         "last_update": dict(last)["timestamp"] if last else "",
@@ -159,6 +254,9 @@ def handle_status():
         "role": role,
         "node_name": config.get("DYNDNS_NODE_NAME", ""),
         "is_active": is_active,
+        "domains_total": domains_total,
+        "domains_enabled": domains_enabled,
+        "hosts_enabled": hosts_enabled,
         "stats": {
             "total": total,
             "successes": successes,
@@ -171,15 +269,23 @@ def handle_history():
     qs = parse_qs(os.environ.get("QUERY_STRING", ""))
     limit = min(int(qs.get("limit", ["50"])[0]), 200)
     offset = int(qs.get("offset", ["0"])[0])
+    filter_domain = qs.get("domain", [""])[0].strip()
 
     db = get_db()
     cur = db.cursor()
+
+    where = ""
+    params = []
+    if filter_domain:
+        where = " WHERE domain = ?"
+        params.append(filter_domain)
+
     cur.execute(
-        "SELECT id, timestamp, old_ip, new_ip, status, message FROM updates ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-        (limit, offset),
+        f"SELECT id, timestamp, old_ip, new_ip, status, message, domain, host FROM updates{where} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+        params + [limit, offset],
     )
     rows = [dict(r) for r in cur.fetchall()]
-    total = db.execute("SELECT COUNT(*) FROM updates").fetchone()[0]
+    total = db.execute(f"SELECT COUNT(*) FROM updates{where}", params).fetchone()[0]
     db.close()
 
     try:
@@ -196,9 +302,6 @@ def handle_history():
 def handle_config_get():
     config = read_config()
     respond("200 OK", {
-        "domain": config.get("DYNDNS_DOMAIN", ""),
-        "host": config.get("DYNDNS_HOST", "@"),
-        "password": "****" if config.get("DYNDNS_PASSWORD") else "",
         "interval": config.get("DYNDNS_INTERVAL", "5"),
         "web_port": config.get("DYNDNS_WEB_PORT", "8080"),
         "web_auth_enabled": config.get("DYNDNS_WEB_AUTH_ENABLED", "false") == "true",
@@ -288,19 +391,6 @@ def handle_config_post():
     changed_interval = False
     changed_lighttpd = False
     changed_heartbeat = False
-
-    if "domain" in data:
-        domain = data["domain"]
-        if not re.match(r"^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$", domain):
-            respond("400 Bad Request", {"error": "Ungültige Domain"})
-        config["DYNDNS_DOMAIN"] = domain
-
-    if "host" in data:
-        host = re.sub(r"[^a-zA-Z0-9@._-]", "", data["host"])
-        config["DYNDNS_HOST"] = host or "@"
-
-    if "password" in data and data["password"] and data["password"] != "****":
-        config["DYNDNS_PASSWORD"] = data["password"]
 
     if "interval" in data:
         try:
@@ -476,6 +566,9 @@ def handle_heartbeat():
     if role == "failover":
         is_active = state.get("is_active", "0") or "0"
 
+    domains_data = read_domains()
+    domains_count = sum(1 for d in domains_data["domains"] if d.get("enabled", True))
+
     respond("200 OK", {
         "ok": True,
         "role": role,
@@ -484,8 +577,7 @@ def handle_heartbeat():
         "last_update": dict(last)["timestamp"] if last else "",
         "last_status": dict(last)["status"] if last else "",
         "is_active": is_active,
-        "domain": config.get("DYNDNS_DOMAIN", ""),
-        "host": config.get("DYNDNS_HOST", "@"),
+        "domains_count": domains_count,
     })
 
 
@@ -564,6 +656,163 @@ def handle_failover_control():
         respond("400 Bad Request", {"error": "Unbekannter Befehl"})
 
 
+# --- Domain CRUD ---
+
+def _read_post_json():
+    content_length = int(os.environ.get("CONTENT_LENGTH", 0))
+    if content_length == 0:
+        respond("400 Bad Request", {"error": "Keine Daten"})
+    body = sys.stdin.read(content_length)
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        respond("400 Bad Request", {"error": "Ungültiges JSON"})
+
+
+def _normalize_hosts(raw_hosts):
+    """Accepts list of strings or list of {host, enabled} dicts. Returns dedup'd valid list."""
+    seen = set()
+    out = []
+    if not isinstance(raw_hosts, list):
+        return None, "Hosts müssen als Liste angegeben werden"
+    for item in raw_hosts:
+        if isinstance(item, str):
+            host = item
+            enabled = True
+        elif isinstance(item, dict):
+            host = item.get("host", "")
+            enabled = bool(item.get("enabled", True))
+        else:
+            return None, "Ungültiger Host-Eintrag"
+        host = validate_host_name(host)
+        if host is None:
+            return None, "Ungültiger Host-Name"
+        if host in seen:
+            continue
+        seen.add(host)
+        out.append({"host": host, "enabled": enabled})
+    if not out:
+        return None, "Mindestens ein Host erforderlich"
+    return out, None
+
+
+def handle_domains_get():
+    respond("200 OK", {"domains": domains_for_ui(read_domains())})
+
+
+def handle_domain_add():
+    data = _read_post_json()
+    domain = (data.get("domain") or "").strip().lower()
+    password = (data.get("password") or "").strip()
+    enabled = bool(data.get("enabled", True))
+    hosts, err = _normalize_hosts(data.get("hosts", []))
+
+    if not DOMAIN_RE.match(domain):
+        respond("400 Bad Request", {"error": "Ungültige Domain"})
+    if not password:
+        respond("400 Bad Request", {"error": "DynDNS-Passwort erforderlich"})
+    if err:
+        respond("400 Bad Request", {"error": err})
+
+    store = read_domains()
+    if any(d.get("domain", "").lower() == domain for d in store["domains"]):
+        respond("409 Conflict", {"error": "Domain existiert bereits"})
+
+    new_entry = {
+        "id": uuid.uuid4().hex,
+        "domain": domain,
+        "password": password,
+        "enabled": enabled,
+        "hosts": hosts,
+    }
+    store["domains"].append(new_entry)
+    write_domains(store)
+    respond("200 OK", {"success": True, "id": new_entry["id"]})
+
+
+def handle_domain_update():
+    data = _read_post_json()
+    did = (data.get("id") or "").strip()
+    if not did:
+        respond("400 Bad Request", {"error": "ID fehlt"})
+
+    store = read_domains()
+    target = next((d for d in store["domains"] if d.get("id") == did), None)
+    if not target:
+        respond("404 Not Found", {"error": "Domain nicht gefunden"})
+
+    if "domain" in data:
+        domain = (data["domain"] or "").strip().lower()
+        if not DOMAIN_RE.match(domain):
+            respond("400 Bad Request", {"error": "Ungültige Domain"})
+        if any(d.get("domain", "").lower() == domain and d.get("id") != did
+               for d in store["domains"]):
+            respond("409 Conflict", {"error": "Domain existiert bereits"})
+        target["domain"] = domain
+
+    if "password" in data:
+        pw = (data["password"] or "").strip()
+        if pw and pw != "****":
+            target["password"] = pw
+
+    if "enabled" in data:
+        target["enabled"] = bool(data["enabled"])
+
+    if "hosts" in data:
+        hosts, err = _normalize_hosts(data["hosts"])
+        if err:
+            respond("400 Bad Request", {"error": err})
+        target["hosts"] = hosts
+
+    write_domains(store)
+    respond("200 OK", {"success": True})
+
+
+def handle_domain_delete():
+    data = _read_post_json()
+    did = (data.get("id") or "").strip()
+    if not did:
+        respond("400 Bad Request", {"error": "ID fehlt"})
+    store = read_domains()
+    before = len(store["domains"])
+    store["domains"] = [d for d in store["domains"] if d.get("id") != did]
+    if len(store["domains"]) == before:
+        respond("404 Not Found", {"error": "Domain nicht gefunden"})
+    write_domains(store)
+    respond("200 OK", {"success": True})
+
+
+def handle_domain_toggle():
+    """Toggle enabled state of a whole domain (target='domain') or one host (target='host', host=name)."""
+    data = _read_post_json()
+    did = (data.get("id") or "").strip()
+    target_type = data.get("target", "domain")
+    enabled = bool(data.get("enabled", True))
+    if not did:
+        respond("400 Bad Request", {"error": "ID fehlt"})
+
+    store = read_domains()
+    entry = next((d for d in store["domains"] if d.get("id") == did), None)
+    if not entry:
+        respond("404 Not Found", {"error": "Domain nicht gefunden"})
+
+    if target_type == "domain":
+        entry["enabled"] = enabled
+    elif target_type == "host":
+        host_name = validate_host_name(data.get("host", ""))
+        if host_name is None:
+            respond("400 Bad Request", {"error": "Ungültiger Host"})
+        match = next((h for h in entry.get("hosts", []) if h.get("host") == host_name), None)
+        if not match:
+            respond("404 Not Found", {"error": "Host nicht gefunden"})
+        match["enabled"] = enabled
+    else:
+        respond("400 Bad Request", {"error": "Unbekanntes target"})
+
+    write_domains(store)
+    respond("200 OK", {"success": True})
+
+
 # --- Router ---
 
 def main():
@@ -574,6 +823,8 @@ def main():
 
     qs = parse_qs(os.environ.get("QUERY_STRING", ""))
     action = qs.get("action", [""])[0]
+
+    ensure_domains_file()
 
     config = read_config()
     check_auth(config, action)
@@ -589,6 +840,8 @@ def main():
             handle_peer_status()
         elif action == "heartbeat":
             handle_heartbeat()
+        elif action == "domains":
+            handle_domains_get()
         else:
             respond("400 Bad Request", {"error": "Unbekannte Aktion"})
     elif method == "POST":
@@ -600,6 +853,14 @@ def main():
             handle_failover_control()
         elif action == "heartbeat":
             handle_heartbeat()
+        elif action == "domain-add":
+            handle_domain_add()
+        elif action == "domain-update":
+            handle_domain_update()
+        elif action == "domain-delete":
+            handle_domain_delete()
+        elif action == "domain-toggle":
+            handle_domain_toggle()
         else:
             respond("400 Bad Request", {"error": "Unbekannte Aktion"})
     else:

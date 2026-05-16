@@ -33,12 +33,8 @@
             <h2>Status</h2>
             <div class="status-grid">
                 <div class="status-item">
-                    <span class="label">Domain</span>
-                    <span class="value" id="st-domain">—</span>
-                </div>
-                <div class="status-item">
-                    <span class="label">Host</span>
-                    <span class="value" id="st-host">—</span>
+                    <span class="label">Domains</span>
+                    <span class="value" id="st-domains">—</span>
                 </div>
                 <div class="status-item">
                     <span class="label">Aktuelle IP</span>
@@ -114,14 +110,30 @@
         <!-- Toast -->
         <div id="toast" class="toast hidden"></div>
 
+        <!-- Domains Card -->
+        <section class="card">
+            <div class="card-header">
+                <h2>Domains</h2>
+                <button class="btn btn-primary btn-sm" onclick="openDomainEditor()">+ Neue Domain</button>
+            </div>
+            <div id="domains-list" class="domains-list">
+                <div class="empty">Lade Domains...</div>
+            </div>
+        </section>
+
         <!-- History Card -->
         <section class="card">
             <div class="card-header">
                 <h2>Verlauf</h2>
-                <div class="pagination">
-                    <button class="btn btn-sm" id="btn-prev" onclick="prevPage()" disabled>&laquo; Zurück</button>
-                    <span id="page-info">—</span>
-                    <button class="btn btn-sm" id="btn-next" onclick="nextPage()" disabled>Weiter &raquo;</button>
+                <div class="history-controls">
+                    <select id="history-filter" class="history-filter" onchange="onHistoryFilterChange()">
+                        <option value="">Alle Domains</option>
+                    </select>
+                    <div class="pagination">
+                        <button class="btn btn-sm" id="btn-prev" onclick="prevPage()" disabled>&laquo; Zurück</button>
+                        <span id="page-info">—</span>
+                        <button class="btn btn-sm" id="btn-next" onclick="nextPage()" disabled>Weiter &raquo;</button>
+                    </div>
                 </div>
             </div>
             <div class="table-wrap">
@@ -129,6 +141,8 @@
                     <thead>
                         <tr>
                             <th>Zeitpunkt</th>
+                            <th>Domain</th>
+                            <th>Host</th>
                             <th>Alte IP</th>
                             <th>Neue IP</th>
                             <th>Status</th>
@@ -136,11 +150,42 @@
                         </tr>
                     </thead>
                     <tbody id="history-body">
-                        <tr><td colspan="5" class="empty">Lade Daten...</td></tr>
+                        <tr><td colspan="7" class="empty">Lade Daten...</td></tr>
                     </tbody>
                 </table>
             </div>
         </section>
+
+        <!-- Domain Editor Modal -->
+        <div id="domain-modal" class="modal hidden" onclick="if(event.target===this) closeDomainEditor()">
+            <div class="modal-body">
+                <div class="modal-header">
+                    <h3 id="domain-modal-title">Neue Domain</h3>
+                    <button class="modal-close" onclick="closeDomainEditor()" aria-label="Schließen">&times;</button>
+                </div>
+                <form id="domain-form" onsubmit="submitDomain(event)">
+                    <div class="form-group">
+                        <label for="dm-domain">Domain</label>
+                        <input type="text" id="dm-domain" required pattern="[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}" placeholder="beispiel.de">
+                    </div>
+                    <div class="form-group">
+                        <label for="dm-password">DynDNS-Passwort (Namecheap)</label>
+                        <input type="password" id="dm-password" placeholder="Bei Bearbeitung leer = unverändert">
+                        <small class="hint">Pro Namecheap-Domain ein Passwort (Advanced DNS → Dynamic DNS).</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Hosts</label>
+                        <div id="dm-hosts" class="host-editor"></div>
+                        <button type="button" class="btn btn-sm" onclick="addHostRow()">+ Host hinzufügen</button>
+                        <small class="hint">"@" steht für die Root-Domain selbst.</small>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn" onclick="closeDomainEditor()">Abbrechen</button>
+                        <button type="submit" class="btn btn-primary">Speichern</button>
+                    </div>
+                </form>
+            </div>
+        </div>
 
         <!-- Settings Card -->
         <section class="card">
@@ -153,23 +198,11 @@
             <div id="settings-body" class="settings-body hidden">
 
                 <div class="settings-section">
-                    <h3>DynDNS</h3>
-                    <form id="dyndns-form" onsubmit="saveDyndns(event)">
+                    <h3>Allgemein</h3>
+                    <form id="general-form" onsubmit="saveGeneral(event)">
                         <div class="form-grid">
                             <div class="form-group">
-                                <label for="cfg-domain">Domain</label>
-                                <input type="text" id="cfg-domain" required pattern="[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}">
-                            </div>
-                            <div class="form-group">
-                                <label for="cfg-host">Host (@ = Root)</label>
-                                <input type="text" id="cfg-host" placeholder="@">
-                            </div>
-                            <div class="form-group">
-                                <label for="cfg-password">DynDNS-Passwort</label>
-                                <input type="password" id="cfg-password" placeholder="Unverändert lassen = ****">
-                            </div>
-                            <div class="form-group">
-                                <label for="cfg-interval">Intervall (Min.)</label>
+                                <label for="cfg-interval">Update-Intervall (Min.)</label>
                                 <input type="number" id="cfg-interval" min="1" max="60" required>
                             </div>
                             <div class="form-group">
@@ -178,7 +211,7 @@
                             </div>
                         </div>
                         <div class="form-actions">
-                            <button type="submit" class="btn btn-primary">DynDNS speichern</button>
+                            <button type="submit" class="btn btn-primary">Speichern</button>
                         </div>
                     </form>
                 </div>

@@ -4,6 +4,7 @@ set -euo pipefail
 INSTALL_DIR="/opt/dyndns"
 CONFIG_DIR="/etc/dyndns"
 CONFIG_FILE="$CONFIG_DIR/config.env"
+DOMAINS_FILE="$CONFIG_DIR/domains.json"
 DB_DIR="/var/lib/dyndns"
 DB_FILE="$DB_DIR/history.db"
 LOG_DIR="/var/log/dyndns"
@@ -74,7 +75,7 @@ esac
 
 {
     echo 10; apt-get update -qq
-    echo 40; apt-get install -y -qq lighttpd curl sqlite3 > /dev/null 2>&1
+    echo 40; apt-get install -y -qq lighttpd curl sqlite3 jq > /dev/null 2>&1
     echo 70; apt-get install -y -qq whiptail openssl > /dev/null 2>&1 || true
     echo 100
 } | whiptail --title "DynDNS Setup" --gauge "Installiere Abhängigkeiten..." "$WT_HEIGHT" "$WT_WIDTH" 0
@@ -83,6 +84,7 @@ esac
 
 EXISTING_DOMAIN=""
 EXISTING_HOST="@"
+EXISTING_PASSWORD=""
 EXISTING_INTERVAL="5"
 EXISTING_PORT="8080"
 EXISTING_NODE_NAME="$(hostname)"
@@ -96,6 +98,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
     EXISTING_DOMAIN="${DYNDNS_DOMAIN:-}"
     EXISTING_HOST="${DYNDNS_HOST:-@}"
+    EXISTING_PASSWORD="${DYNDNS_PASSWORD:-}"
     EXISTING_INTERVAL="${DYNDNS_INTERVAL:-5}"
     EXISTING_PORT="${DYNDNS_WEB_PORT:-8080}"
     EXISTING_NODE_NAME="${DYNDNS_NODE_NAME:-$(hostname)}"
@@ -103,6 +106,16 @@ if [[ -f "$CONFIG_FILE" ]]; then
     EXISTING_PEER_TOKEN="${DYNDNS_PEER_TOKEN:-}"
     EXISTING_HB_INTERVAL="${DYNDNS_HEARTBEAT_INTERVAL:-30}"
     EXISTING_FO_THRESHOLD="${DYNDNS_FAILOVER_THRESHOLD:-3}"
+fi
+
+# If domains.json already exists, prefer its first entry for defaults.
+if [[ -f "$DOMAINS_FILE" ]] && command -v jq >/dev/null 2>&1; then
+    FIRST_DOMAIN=$(jq -r '.domains[0].domain // ""' "$DOMAINS_FILE" 2>/dev/null || echo "")
+    FIRST_HOST=$(jq -r '.domains[0].hosts[0].host // "@"' "$DOMAINS_FILE" 2>/dev/null || echo "@")
+    FIRST_PW=$(jq -r '.domains[0].password // ""' "$DOMAINS_FILE" 2>/dev/null || echo "")
+    [[ -n "$FIRST_DOMAIN" ]] && EXISTING_DOMAIN="$FIRST_DOMAIN"
+    [[ -n "$FIRST_HOST" ]] && EXISTING_HOST="$FIRST_HOST"
+    [[ -n "$FIRST_PW" ]] && EXISTING_PASSWORD="$FIRST_PW"
 fi
 
 # --- Node name ---
@@ -128,9 +141,9 @@ HOST=$(input "Host-Record:\n\n  '@'  = Hauptdomain (also meinedomain.de)\n  'www
 # --- DynDNS Password ---
 
 DDNS_PASS=""
-if [[ -n "${DYNDNS_PASSWORD:-}" ]]; then
+if [[ -n "${EXISTING_PASSWORD:-}" ]]; then
     if yesno "Bestehendes NameCheap DynDNS-Passwort wiederverwenden?\n\nWähle 'Nein', um es neu einzugeben."; then
-        DDNS_PASS="$DYNDNS_PASSWORD"
+        DDNS_PASS="$EXISTING_PASSWORD"
     fi
 fi
 
@@ -273,9 +286,6 @@ mkdir -p "$INSTALL_DIR/web/cgi-bin" "$INSTALL_DIR/web/static" "$INSTALL_DIR/web/
 cat > "$CONFIG_FILE" <<EOF
 DYNDNS_ROLE=$ROLE
 DYNDNS_NODE_NAME=$NODE_NAME
-DYNDNS_DOMAIN=$DOMAIN
-DYNDNS_HOST=$HOST
-DYNDNS_PASSWORD=$DDNS_PASS
 DYNDNS_INTERVAL=$INTERVAL
 DYNDNS_WEB_PORT=$WEB_PORT
 DYNDNS_WEB_AUTH_ENABLED=$WEB_AUTH_ENABLED
@@ -288,6 +298,61 @@ EOF
 
 chmod 0640 "$CONFIG_FILE"
 chown root:www-data "$CONFIG_FILE"
+
+# --- Write/merge domains.json ---
+
+DOMAIN_ID=$(openssl rand -hex 16)
+
+if [[ -f "$DOMAINS_FILE" ]]; then
+    # Preserve other domains; replace/insert the one the user just entered.
+    TMP_DOM=$(mktemp)
+    jq --arg id "$DOMAIN_ID" \
+       --arg domain "$DOMAIN" \
+       --arg host "$HOST" \
+       --arg password "$DDNS_PASS" \
+       '
+       .domains = (.domains // []) |
+       (.domains | map(.domain | ascii_downcase) | index($domain | ascii_downcase)) as $idx |
+       if $idx == null then
+           .domains += [{
+               id: $id,
+               domain: ($domain | ascii_downcase),
+               password: $password,
+               enabled: true,
+               hosts: [{host: $host, enabled: true}]
+           }]
+       else
+           .domains[$idx].password = $password |
+           .domains[$idx].enabled = true |
+           (.domains[$idx].hosts | map(.host) | index($host)) as $hidx |
+           if $hidx == null then
+               .domains[$idx].hosts += [{host: $host, enabled: true}]
+           else
+               .domains[$idx].hosts[$hidx].enabled = true
+           end
+       end
+       ' "$DOMAINS_FILE" > "$TMP_DOM"
+    mv "$TMP_DOM" "$DOMAINS_FILE"
+else
+    cat > "$DOMAINS_FILE" <<EOF
+{
+  "domains": [
+    {
+      "id": "$DOMAIN_ID",
+      "domain": "$DOMAIN",
+      "password": "$DDNS_PASS",
+      "enabled": true,
+      "hosts": [
+        { "host": "$HOST", "enabled": true }
+      ]
+    }
+  ]
+}
+EOF
+fi
+
+chmod 0640 "$DOMAINS_FILE"
+chown root:www-data "$DOMAINS_FILE"
 
 # --- Web auth setup ---
 
@@ -310,9 +375,12 @@ CREATE TABLE IF NOT EXISTS updates (
     new_ip TEXT,
     status TEXT NOT NULL CHECK(status IN ('success', 'failure', 'skipped', 'error')),
     response TEXT,
-    message TEXT
+    message TEXT,
+    domain TEXT,
+    host TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_updates_timestamp ON updates(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_updates_domain_host ON updates(domain, host, timestamp DESC);
 
 CREATE TABLE IF NOT EXISTS node_state (
     id INTEGER PRIMARY KEY CHECK (id=1),
@@ -332,6 +400,15 @@ CREATE TABLE IF NOT EXISTS node_state (
 );
 INSERT OR IGNORE INTO node_state (id, is_active) VALUES (1, 0);
 SQL
+
+# Idempotent ALTER for upgrades from older installs that lack domain/host columns.
+if ! sqlite3 "$DB_FILE" "PRAGMA table_info(updates);" | grep -q "|domain|"; then
+    sqlite3 "$DB_FILE" "ALTER TABLE updates ADD COLUMN domain TEXT;"
+fi
+if ! sqlite3 "$DB_FILE" "PRAGMA table_info(updates);" | grep -q "|host|"; then
+    sqlite3 "$DB_FILE" "ALTER TABLE updates ADD COLUMN host TEXT;"
+fi
+sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_updates_domain_host ON updates(domain, host, timestamp DESC);"
 
 # Master is always active by default
 if [[ "$ROLE" == "master" ]] || [[ "$ROLE" == "single" ]]; then
