@@ -31,7 +31,8 @@ Optional als **Master/Failover**-Pärchen über zwei LXCs auf zwei Proxmox-Hosts
                          │ NameCheap DynDNS API   │ (nur wenn Master down)
                          ▼                        ▼
                    ┌─────────────────────────────────┐
-                   │    NameCheap DNS A-Record       │
+                   │  NameCheap A-Records            │
+                   │  (alle aktiven Domains + Hosts) │
                    └─────────────────────────────────┘
 ```
 
@@ -66,6 +67,8 @@ sudo ./setup.sh
 
 Der Assistent fragt alles ab, was nötig ist. Wähle als Rolle **"Single"** für einen einzelnen Server ohne Backup.
 
+> Der Wizard fragt nach **einer** Domain. Weitere Namecheap-Domains fügst du nach dem Setup direkt im Dashboard über **„+ Neue Domain"** hinzu — kein Re-Setup nötig.
+
 ## Schnellstart manuell (Master + Failover)
 
 ### Schritt 1: Master einrichten (LXC #1 auf Proxmox A)
@@ -78,7 +81,7 @@ sudo ./setup.sh
 
 Im Assistenten:
 - Rolle: **"Master"**
-- Domain, Host, NameCheap-Passwort wie üblich
+- Erste Domain, Host und NameCheap-Passwort (weitere Domains fügst du später im Dashboard hinzu)
 - **Failover-Token notieren** (wird angezeigt – kopieren!)
 - Failover-URL kann übersprungen und später eingetragen werden
 
@@ -92,13 +95,15 @@ sudo ./setup.sh
 
 Im Assistenten:
 - Rolle: **"Failover"**
-- Gleiche Domain, gleicher Host, **gleiches** NameCheap-Passwort
+- Gleiche erste Domain, gleicher Host, **gleiches** NameCheap-Passwort wie auf dem Master
 - Master-URL: `http://<IP-des-Masters>:8080`
 - Token: den vom Master kopierten Wert eintragen
 
 ### Schritt 3: Master nachkonfigurieren
 
 Im Master-Dashboard unter **Einstellungen → Failover** die Peer-URL des Failovers eintragen (`http://<IP-des-Failovers>:8080`).
+
+> **Multi-Domain im Failover-Setup:** `domains.json` wird **nicht** automatisch zwischen den Knoten synchronisiert. Jede zusätzliche Domain, die du nach dem Setup im Master-Dashboard anlegst, musst du auch im Failover-Dashboard mit identischem DynDNS-Passwort hinzufügen. Alternative: nach Änderungen `/etc/dyndns/domains.json` einmal per `scp` auf den Failover kopieren.
 
 ## Konfiguration im Dashboard
 
@@ -112,6 +117,19 @@ Das Dashboard ist nach dem Setup unter `http://<lxc-ip>:8080` erreichbar (Port �
 | Web-Auth | Passwort-Schutz aktivieren/deaktivieren, User/Passwort ändern |
 
 Pro Namecheap-Domain wird **ein** DynDNS-Passwort hinterlegt (das aus dem Namecheap-Dashboard unter *Advanced DNS → Dynamic DNS*). Darunter beliebig viele Host-Records. Ein einzelner Updater-Lauf holt die Public-IP einmal und aktualisiert alle aktiven Einträge. Schlägt einer fehl, laufen die übrigen trotzdem durch — der fehlerhafte Eintrag wird in der History markiert.
+
+### Domains hinzufügen
+
+Im Dashboard auf **„+ Neue Domain"** klicken. Im Modal:
+1. **Domain** (z. B. `andere-domain.de`) eingeben
+2. **DynDNS-Passwort** dieser Domain aus Namecheap einfügen (jede Domain hat ein eigenes)
+3. Mindestens einen **Host** angeben — `@` für die Root-Domain, sonst Subdomains wie `www`, `vpn`, `nas`. Beliebig viele Zeilen über **„+ Host hinzufügen"**.
+
+Im Listen-View danach:
+- **Toggle pro Domain** — pausiert alle Hosts dieser Domain (Eintrag wird beim nächsten Lauf übersprungen, bleibt aber gespeichert)
+- **Toggle pro Host** — pausiert nur einzelne Subdomains
+- **Bearbeiten** — Passwort ändern oder Hosts hinzufügen/entfernen
+- **Löschen** — entfernt Domain inkl. Passwort komplett (History bleibt erhalten)
 
 Im **Failover-Bereich** zusätzlich:
 - Peer-Status live (Online/Offline, letzter Heartbeat, Fehlversuche)
@@ -185,7 +203,13 @@ sudo /opt/dyndns/heartbeat.sh
 
 # DB-Status
 sqlite3 /var/lib/dyndns/history.db "SELECT * FROM node_state;"
-sqlite3 /var/lib/dyndns/history.db "SELECT * FROM updates ORDER BY id DESC LIMIT 5;"
+sqlite3 /var/lib/dyndns/history.db "SELECT timestamp, domain, host, status, message FROM updates ORDER BY id DESC LIMIT 10;"
+
+# Domains-Konfiguration prüfen (Passwörter im Klartext!)
+cat /etc/dyndns/domains.json
+
+# History nur für eine bestimmte Domain
+sqlite3 /var/lib/dyndns/history.db "SELECT timestamp, host, status, message FROM updates WHERE domain='beispiel.de' ORDER BY id DESC LIMIT 10;"
 ```
 
 ## Lizenz
