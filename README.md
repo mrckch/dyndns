@@ -69,7 +69,7 @@ Der Assistent fragt alles ab, was nötig ist. Wähle als Rolle **"Single"** für
 
 > Der Wizard kann **mehrere Namecheap-Domains** in einer Sitzung einrichten: nach jeder eingegebenen Domain (mit kommagetrennten Hosts, z. B. `@,www,vpn`) fragt er, ob du eine weitere hinzufügen möchtest. Du kannst aber auch jederzeit später im Dashboard über **„+ Neue Domain"** weitere ergänzen.
 >
-> Das Script läuft als **root** und installiert `sudo` automatisch mit, falls nicht vorhanden — du brauchst es also nicht vorher per Hand zu installieren. Falls du selbst mit `sudo` arbeitest, geht `sudo ./setup.sh` natürlich genauso.
+> **Hinweis zu sudo:** Das Script muss als **root** laufen (in einer LXC bist du nach `pct enter` ohnehin root, kein Prefix nötig). `sudo` selbst wird vom Setup als apt-Paket nachinstalliert, falls es fehlt — das Dashboard nutzt es später intern, damit der Webserver-User (`www-data`) Timer neu starten darf. Du selbst brauchst `sudo` nirgends manuell.
 
 ## Schnellstart manuell (Master + Failover)
 
@@ -197,11 +197,11 @@ journalctl -u dyndns-heartbeat.service -f
 tail -f /var/log/dyndns/update.log
 tail -f /var/log/dyndns/heartbeat.log
 
-# Update manuell ausführen
-sudo /opt/dyndns/updater.sh
+# Update manuell ausführen (als root in der LXC)
+/opt/dyndns/updater.sh
 
 # Heartbeat manuell ausführen
-sudo /opt/dyndns/heartbeat.sh
+/opt/dyndns/heartbeat.sh
 
 # DB-Status
 sqlite3 /var/lib/dyndns/history.db "SELECT * FROM node_state;"
