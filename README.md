@@ -62,12 +62,14 @@ Für ein Master/Failover-Pärchen führst du das Skript einmal auf jedem Proxmox
 ```bash
 git clone https://github.com/mrckch/dyndns.git
 cd dyndns
-sudo ./setup.sh
+./setup.sh
 ```
 
 Der Assistent fragt alles ab, was nötig ist. Wähle als Rolle **"Single"** für einen einzelnen Server ohne Backup.
 
-> Der Wizard fragt nach **einer** Domain. Weitere Namecheap-Domains fügst du nach dem Setup direkt im Dashboard über **„+ Neue Domain"** hinzu — kein Re-Setup nötig.
+> Der Wizard kann **mehrere Namecheap-Domains** in einer Sitzung einrichten: nach jeder eingegebenen Domain (mit kommagetrennten Hosts, z. B. `@,www,vpn`) fragt er, ob du eine weitere hinzufügen möchtest. Du kannst aber auch jederzeit später im Dashboard über **„+ Neue Domain"** weitere ergänzen.
+>
+> Das Script läuft als **root** und installiert `sudo` automatisch mit, falls nicht vorhanden — du brauchst es also nicht vorher per Hand zu installieren. Falls du selbst mit `sudo` arbeitest, geht `sudo ./setup.sh` natürlich genauso.
 
 ## Schnellstart manuell (Master + Failover)
 
@@ -76,12 +78,12 @@ Der Assistent fragt alles ab, was nötig ist. Wähle als Rolle **"Single"** für
 ```bash
 git clone https://github.com/mrckch/dyndns.git
 cd dyndns
-sudo ./setup.sh
+./setup.sh
 ```
 
 Im Assistenten:
 - Rolle: **"Master"**
-- Erste Domain, Host und NameCheap-Passwort (weitere Domains fügst du später im Dashboard hinzu)
+- Erste Domain, Hosts (kommagetrennt) und NameCheap-Passwort; nach jeder Domain wirst du gefragt, ob du eine weitere hinzufügen möchtest
 - **Failover-Token notieren** (wird angezeigt – kopieren!)
 - Failover-URL kann übersprungen und später eingetragen werden
 
@@ -90,12 +92,12 @@ Im Assistenten:
 ```bash
 git clone https://github.com/mrckch/dyndns.git
 cd dyndns
-sudo ./setup.sh
+./setup.sh
 ```
 
 Im Assistenten:
 - Rolle: **"Failover"**
-- Gleiche erste Domain, gleicher Host, **gleiches** NameCheap-Passwort wie auf dem Master
+- **Alle** Domains aus dem Master-Setup eintragen (gleiche Hosts, **gleiche** Passwörter) — bei jeder Domain mit "Weitere hinzufügen?" durchklicken
 - Master-URL: `http://<IP-des-Masters>:8080`
 - Token: den vom Master kopierten Wert eintragen
 

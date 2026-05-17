@@ -75,7 +75,7 @@ esac
 
 {
     echo 10; apt-get update -qq
-    echo 40; apt-get install -y -qq lighttpd curl sqlite3 jq > /dev/null 2>&1
+    echo 40; apt-get install -y -qq lighttpd curl sqlite3 jq sudo > /dev/null 2>&1
     echo 70; apt-get install -y -qq whiptail openssl > /dev/null 2>&1 || true
     echo 100
 } | whiptail --title "DynDNS Setup" --gauge "Installiere Abhängigkeiten..." "$WT_HEIGHT" "$WT_WIDTH" 0
@@ -123,40 +123,87 @@ fi
 NODE_NAME=$(input "Name dieses Servers (wird im Dashboard angezeigt, z.B. 'lxc-master-pve1'):" "$EXISTING_NODE_NAME")
 [[ -z "$NODE_NAME" ]] && NODE_NAME="$(hostname)"
 
-# --- Domain ---
+# --- Domain(s) ---
+#
+# Mehrere Namecheap-Domains möglich. Erste Runde nutzt Defaults aus
+# config.env/domains.json; danach werden weitere Domains frisch erfragt.
+# Parallele Arrays statt assoziativer Struktur, damit das Script auch
+# unter bash 4 (ohne nameref/maps) sauber läuft.
+
+COLLECTED_DOMAINS=()
+COLLECTED_HOSTS=()       # je Domain eine kommagetrennte Host-Liste
+COLLECTED_PASSWORDS=()
+ROUND=1
 
 while true; do
-    DOMAIN=$(input "Domain-Name eingeben:\n\nBeispiel: meinedomain.de\n(Die Domain, die du bei NameCheap registriert hast.)" "$EXISTING_DOMAIN")
-    if [[ "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$ ]]; then
+    if [[ $ROUND -eq 1 ]]; then
+        DOMAIN_DEFAULT="$EXISTING_DOMAIN"
+        HOST_DEFAULT="$EXISTING_HOST"
+        DOMAIN_PROMPT="Domain-Name eingeben:\n\nBeispiel: meinedomain.de\n(Die Domain, die du bei NameCheap registriert hast.)"
+    else
+        DOMAIN_DEFAULT=""
+        HOST_DEFAULT="@"
+        DOMAIN_PROMPT="Weitere Domain hinzufügen:\n\nName der nächsten NameCheap-Domain."
+    fi
+
+    while true; do
+        DOMAIN=$(input "$DOMAIN_PROMPT" "$DOMAIN_DEFAULT")
+        if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$ ]]; then
+            msg "Ungültiger Domain-Name. Bitte erneut eingeben."
+            continue
+        fi
+        # Doppelte Eingabe in dieser Wizard-Session verhindern
+        DUP=0
+        for existing in "${COLLECTED_DOMAINS[@]}"; do
+            if [[ "${existing,,}" == "${DOMAIN,,}" ]]; then
+                DUP=1
+                break
+            fi
+        done
+        if [[ $DUP -eq 1 ]]; then
+            msg "Domain '$DOMAIN' wurde gerade eben schon eingetragen. Bitte eine andere wählen."
+            continue
+        fi
+        break
+    done
+
+    HOSTS_INPUT=$(input "Host-Record(s) für ${DOMAIN}:\n\n  '@'  = Hauptdomain (also ${DOMAIN})\n  'www' = www.${DOMAIN}\n  'home' = home.${DOMAIN}\n\nMehrere Hosts kommagetrennt eintragen, z.B. '@,www,vpn'.\nMeistens passt '@'." "$HOST_DEFAULT")
+    [[ -z "$HOSTS_INPUT" ]] && HOSTS_INPUT="@"
+
+    DDNS_PASS=""
+    if [[ $ROUND -eq 1 ]] && [[ -n "${EXISTING_PASSWORD:-}" ]]; then
+        if yesno "Bestehendes NameCheap DynDNS-Passwort für ${DOMAIN} wiederverwenden?\n\nWähle 'Nein', um es neu einzugeben."; then
+            DDNS_PASS="$EXISTING_PASSWORD"
+        fi
+    fi
+
+    if [[ -z "$DDNS_PASS" ]]; then
+        if [[ $ROUND -eq 1 ]]; then
+            msg "Du brauchst jetzt das NameCheap DynDNS-Passwort für ${DOMAIN}.\n\nSo findest du es:\n  1) Auf namecheap.com einloggen\n  2) Domain-Liste -> 'Manage' bei der Domain\n  3) Tab 'Advanced DNS'\n  4) Abschnitt 'Dynamic DNS' -> aktivieren falls nicht aktiv\n  5) Das angezeigte Passwort kopieren (32 Zeichen, hex)\n\nWICHTIG: Bei Master+Failover muss auf beiden Servern dasselbe Passwort hinterlegt sein."
+        fi
+        while true; do
+            DDNS_PASS=$(password "DynDNS-Passwort für ${DOMAIN}:")
+            if [[ -n "$DDNS_PASS" ]]; then
+                break
+            fi
+            msg "Passwort darf nicht leer sein."
+        done
+    fi
+
+    COLLECTED_DOMAINS+=("$DOMAIN")
+    COLLECTED_HOSTS+=("$HOSTS_INPUT")
+    COLLECTED_PASSWORDS+=("$DDNS_PASS")
+
+    if ! yesno "Weitere NameCheap-Domain hinzufügen?\n\nDu kannst auch später jederzeit über das Dashboard weitere Domains anlegen, bearbeiten oder löschen."; then
         break
     fi
-    msg "Ungültiger Domain-Name. Bitte erneut eingeben."
+    ROUND=$((ROUND + 1))
 done
 
-# --- Host ---
-
-HOST=$(input "Host-Record:\n\n  '@'  = Hauptdomain (also meinedomain.de)\n  'www' = www.meinedomain.de\n  'home' = home.meinedomain.de\n\nMeistens passt '@'." "$EXISTING_HOST")
-[[ -z "$HOST" ]] && HOST="@"
-
-# --- DynDNS Password ---
-
-DDNS_PASS=""
-if [[ -n "${EXISTING_PASSWORD:-}" ]]; then
-    if yesno "Bestehendes NameCheap DynDNS-Passwort wiederverwenden?\n\nWähle 'Nein', um es neu einzugeben."; then
-        DDNS_PASS="$EXISTING_PASSWORD"
-    fi
-fi
-
-if [[ -z "$DDNS_PASS" ]]; then
-    msg "Du brauchst jetzt das NameCheap DynDNS-Passwort.\n\nSo findest du es:\n  1) Auf namecheap.com einloggen\n  2) Domain-Liste -> 'Manage' bei deiner Domain\n  3) Tab 'Advanced DNS'\n  4) Abschnitt 'Dynamic DNS' -> aktivieren falls nicht aktiv\n  5) Das angezeigte Passwort kopieren (32 Zeichen, hex)\n\nWICHTIG: Beide Server (Master und Failover) brauchen das GLEICHE Passwort."
-    while true; do
-        DDNS_PASS=$(password "NameCheap DynDNS-Passwort eingeben:")
-        if [[ -n "$DDNS_PASS" ]]; then
-            break
-        fi
-        msg "Passwort darf nicht leer sein."
-    done
-fi
+# Beibehalten für Kompatibilität mit späteren Summary/Logging-Stellen
+DOMAIN="${COLLECTED_DOMAINS[0]}"
+HOST="${COLLECTED_HOSTS[0]%%,*}"
+DDNS_PASS="${COLLECTED_PASSWORDS[0]}"
 
 # --- Update interval ---
 
@@ -260,7 +307,10 @@ fi
 SUMMARY="Bitte überprüfe die Einstellungen:\n\n"
 SUMMARY+="Rolle:        $ROLE\n"
 SUMMARY+="Servername:   $NODE_NAME\n"
-SUMMARY+="Domain:       $HOST.$DOMAIN\n"
+SUMMARY+="Domains:\n"
+for i in "${!COLLECTED_DOMAINS[@]}"; do
+    SUMMARY+="  - ${COLLECTED_DOMAINS[$i]}  (Hosts: ${COLLECTED_HOSTS[$i]})\n"
+done
 SUMMARY+="Intervall:    alle $INTERVAL Min.\n"
 SUMMARY+="Web-Port:     $WEB_PORT\n"
 SUMMARY+="Web-Auth:     $WEB_AUTH_ENABLED\n"
@@ -300,56 +350,55 @@ chmod 0640 "$CONFIG_FILE"
 chown root:www-data "$CONFIG_FILE"
 
 # --- Write/merge domains.json ---
+#
+# Bestehende Datei wird gemerged (Hosts dazu, Passwort aktualisiert).
+# Existiert noch keine, wird mit '{"domains":[]}' begonnen.
 
-DOMAIN_ID=$(openssl rand -hex 16)
+if [[ ! -f "$DOMAINS_FILE" ]]; then
+    echo '{"domains":[]}' > "$DOMAINS_FILE"
+fi
 
-if [[ -f "$DOMAINS_FILE" ]]; then
-    # Preserve other domains; replace/insert the one the user just entered.
+for idx in "${!COLLECTED_DOMAINS[@]}"; do
+    DM="${COLLECTED_DOMAINS[$idx]}"
+    PW="${COLLECTED_PASSWORDS[$idx]}"
+    HOSTS_CSV="${COLLECTED_HOSTS[$idx]}"
+    DM_ID=$(openssl rand -hex 16)
+
+    # CSV -> jq array of {host, enabled:true}, leere Felder gefiltert
+    HOSTS_JSON=$(printf '%s' "$HOSTS_CSV" | jq -R '
+        split(",")
+        | map(gsub("^\\s+|\\s+$"; ""))
+        | map(select(length > 0))
+        | unique
+        | map({host: ., enabled: true})')
+
     TMP_DOM=$(mktemp)
-    jq --arg id "$DOMAIN_ID" \
-       --arg domain "$DOMAIN" \
-       --arg host "$HOST" \
-       --arg password "$DDNS_PASS" \
+    jq --arg id "$DM_ID" \
+       --arg domain "$DM" \
+       --arg password "$PW" \
+       --argjson hosts "$HOSTS_JSON" \
        '
        .domains = (.domains // []) |
-       (.domains | map(.domain | ascii_downcase) | index($domain | ascii_downcase)) as $idx |
-       if $idx == null then
+       (.domains | map(.domain | ascii_downcase) | index($domain | ascii_downcase)) as $i |
+       if $i == null then
            .domains += [{
                id: $id,
                domain: ($domain | ascii_downcase),
                password: $password,
                enabled: true,
-               hosts: [{host: $host, enabled: true}]
+               hosts: $hosts
            }]
        else
-           .domains[$idx].password = $password |
-           .domains[$idx].enabled = true |
-           (.domains[$idx].hosts | map(.host) | index($host)) as $hidx |
-           if $hidx == null then
-               .domains[$idx].hosts += [{host: $host, enabled: true}]
-           else
-               .domains[$idx].hosts[$hidx].enabled = true
-           end
+           .domains[$i].password = $password
+           | .domains[$i].enabled = true
+           | .domains[$i].hosts = (
+               ((.domains[$i].hosts // []) + $hosts)
+               | unique_by(.host)
+           )
        end
        ' "$DOMAINS_FILE" > "$TMP_DOM"
     mv "$TMP_DOM" "$DOMAINS_FILE"
-else
-    cat > "$DOMAINS_FILE" <<EOF
-{
-  "domains": [
-    {
-      "id": "$DOMAIN_ID",
-      "domain": "$DOMAIN",
-      "password": "$DDNS_PASS",
-      "enabled": true,
-      "hosts": [
-        { "host": "$HOST", "enabled": true }
-      ]
-    }
-  ]
-}
-EOF
-fi
+done
 
 chmod 0640 "$DOMAINS_FILE"
 chown root:www-data "$DOMAINS_FILE"
@@ -508,13 +557,18 @@ msg "Konfiguration abgeschlossen!\n\nFühre jetzt einen ersten Test durch..."
 
 TEST_OUTPUT=""
 if "$INSTALL_DIR/updater.sh" 2>&1; then
-    CURRENT_IP=$(sqlite3 "$DB_FILE" "SELECT new_ip FROM updates ORDER BY timestamp DESC LIMIT 1;")
+    CURRENT_IP=$(sqlite3 "$DB_FILE" "SELECT new_ip FROM updates WHERE new_ip != '' ORDER BY timestamp DESC LIMIT 1;")
     TEST_STATUS="ERFOLGREICH"
 else
     CURRENT_IP="Unbekannt"
     TEST_STATUS="FEHLGESCHLAGEN"
     TEST_OUTPUT=$(sqlite3 "$DB_FILE" "SELECT message FROM updates ORDER BY timestamp DESC LIMIT 1;")
 fi
+
+DOMAIN_SUMMARY=""
+for i in "${!COLLECTED_DOMAINS[@]}"; do
+    DOMAIN_SUMMARY+="\n  - ${COLLECTED_DOMAINS[$i]}  (${COLLECTED_HOSTS[$i]})"
+done
 
 # Optional peer test
 PEER_TEST=""
@@ -550,7 +604,7 @@ esac
 msg "Setup abgeschlossen!\n\n\
 Status:     $TEST_STATUS\n\
 Rolle:      $ROLE\n\
-Domain:     $HOST.$DOMAIN\n\
+Domains:${DOMAIN_SUMMARY}\n\
 Aktuelle IP: $CURRENT_IP\n\
 Intervall:  alle $INTERVAL Minuten${PEER_TEST}\n\
 \n\
