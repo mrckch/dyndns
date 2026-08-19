@@ -600,6 +600,9 @@ footer {
     padding: 1rem;
 }
 
+/* muss nach .modal stehen, sonst gewinnt display:flex bei gleicher Spezifitaet */
+.modal.hidden { display: none; }
+
 .modal-body {
     background: var(--card);
     border-radius: var(--radius);
