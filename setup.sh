@@ -331,6 +331,12 @@ fi
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$DB_DIR" "$LOG_DIR"
 mkdir -p "$INSTALL_DIR/web/cgi-bin" "$INSTALL_DIR/web/static" "$INSTALL_DIR/web/peer-cgi"
 
+# The dashboard (running as www-data via lighttpd) writes domains.json/config.env/
+# htdigest through an atomic tempfile+rename, which needs write access on the dir
+# itself. setgid keeps the www-data group on files created there.
+chown root:www-data "$CONFIG_DIR"
+chmod 2770 "$CONFIG_DIR"
+
 # --- Write config ---
 
 cat > "$CONFIG_FILE" <<EOF
@@ -509,6 +515,17 @@ fi
 
 lighty-enable-mod cgi 2>/dev/null || true
 ln -sf "$LIGHTTPD_CONF" /etc/lighttpd/conf-enabled/90-dyndns.conf 2>/dev/null || true
+
+# Debian's lighttpd.service ships ProtectSystem=full, which makes /etc read-only
+# for the service. The dashboard writes domains.json/config.env/htdigest under
+# /etc/dyndns and its own auth snippet under /etc/lighttpd, so whitelist both;
+# without this every save from the UI fails with a 500 (read-only file system).
+mkdir -p /etc/systemd/system/lighttpd.service.d
+cat > /etc/systemd/system/lighttpd.service.d/dyndns-writable.conf <<'EOF'
+[Service]
+ReadWritePaths=/etc/dyndns /etc/lighttpd
+EOF
+systemctl daemon-reload
 systemctl restart lighttpd
 
 # --- Install systemd units ---
