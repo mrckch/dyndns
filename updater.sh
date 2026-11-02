@@ -178,8 +178,12 @@ do_update() {
 
     local total=0 ok=0 fail=0
 
-    # Build TSV stream of (domain, host, password, provider) for all enabled host entries.
-    while IFS=$'\t' read -r domain host password provider; do
+    # Stream of (domain, host, password, provider) for all enabled host entries.
+    # Trenner ist das Unit-Separator-Zeichen (0x1f), nicht Tab: Tab zaehlt fuer
+    # `read` als Whitespace, dadurch faellt ein leeres Feld in der Mitte weg und
+    # alle folgenden Felder verrutschen (Domain ohne Passwort -> provider im
+    # Passwortfeld).
+    while IFS=$'\037' read -r domain host password provider; do
         [[ -z "$domain" || -z "$host" ]] && continue
         total=$((total + 1))
         if [[ -z "$password" ]]; then
@@ -198,7 +202,8 @@ do_update() {
         | . as $d
         | .hosts[]
         | select(.enabled != false)
-        | [$d.domain, .host, $d.password, ($d.provider // "namecheap")] | @tsv' "$DOMAINS_FILE")
+        | [$d.domain, .host, ($d.password // ""), ($d.provider // "namecheap")]
+        | join("\u001f")' "$DOMAINS_FILE")
 
     log_msg "RUN" "Domains durchlaufen: ${ok}/${total} erfolgreich, ${fail} Fehler"
 
