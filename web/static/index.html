@@ -169,9 +169,16 @@
                         <input type="text" id="dm-domain" required pattern="[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}" placeholder="beispiel.de">
                     </div>
                     <div class="form-group">
-                        <label for="dm-password">DynDNS-Passwort (Namecheap)</label>
+                        <label for="dm-provider">Anbieter</label>
+                        <select id="dm-provider" onchange="updateProviderHint()">
+                            <option value="namecheap">NameCheap</option>
+                            <option value="strato">STRATO</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="dm-password">DynDNS-Passwort</label>
                         <input type="password" id="dm-password" placeholder="Bei Bearbeitung leer = unverändert">
-                        <small class="hint">Pro Namecheap-Domain ein Passwort (Advanced DNS → Dynamic DNS).</small>
+                        <small class="hint" id="dm-password-hint">Pro Namecheap-Domain ein Passwort (Advanced DNS → Dynamic DNS).</small>
                     </div>
                     <div class="form-group">
                         <label>Hosts</label>
