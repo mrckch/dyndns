@@ -1,13 +1,14 @@
-# DynDNS Updater für NameCheap (mit Failover)
+# DynDNS Updater für NameCheap und STRATO (mit Failover)
 
-Automatischer Dynamic-DNS-Updater für NameCheap-Domains, läuft in einem Debian/Ubuntu-LXC auf Proxmox. Aktualisiert regelmäßig den A-Record auf die aktuelle öffentliche IP und bietet ein Web-Dashboard zur Überwachung und Konfiguration.
+Automatischer Dynamic-DNS-Updater für NameCheap- und STRATO-Domains, läuft in einem Debian/Ubuntu-LXC auf Proxmox. Aktualisiert regelmäßig den A-Record auf die aktuelle öffentliche IP und bietet ein Web-Dashboard zur Überwachung und Konfiguration.
 
 Optional als **Master/Failover**-Pärchen über zwei LXCs auf zwei Proxmox-Hosts: fällt der Master aus, übernimmt der Failover automatisch.
 
 ## Features
 
-- **Mehrere Namecheap-Domains** mit jeweils mehreren Host-Records (`@`, `www`, `vpn`, …) komplett im Dashboard pflegen — anlegen, bearbeiten, löschen, einzeln aktivieren/deaktivieren
-- Update an NameCheap DynDNS API in einstellbarem Intervall (1–60 Min.)
+- **Mehrere Domains** mit jeweils mehreren Host-Records (`@`, `www`, `vpn`, …) komplett im Dashboard pflegen — anlegen, bearbeiten, löschen, einzeln aktivieren/deaktivieren
+- **Zwei Anbieter je Domain wählbar: NameCheap und STRATO** (DynDNS v2)
+- Update in einstellbarem Intervall (1–60 Min.), aber nur bei tatsächlicher IP-Änderung
 - IP-Auflösung über mehrere öffentliche Services (Fallback)
 - Fehler bei einer Domain blockieren die anderen nicht (pro Eintrag eigener History-Status)
 - SQLite-basierte History (90 Tage Aufbewahrung), filterbar nach Domain
@@ -124,14 +125,37 @@ Pro Namecheap-Domain wird **ein** DynDNS-Passwort hinterlegt (das aus dem Namech
 
 Im Dashboard auf **„+ Neue Domain"** klicken. Im Modal:
 1. **Domain** (z. B. `andere-domain.de`) eingeben
-2. **DynDNS-Passwort** dieser Domain aus Namecheap einfügen (jede Domain hat ein eigenes)
-3. Mindestens einen **Host** angeben — `@` für die Root-Domain, sonst Subdomains wie `www`, `vpn`, `nas`. Beliebig viele Zeilen über **„+ Host hinzufügen"**.
+2. **Anbieter** wählen — NameCheap oder STRATO
+3. **DynDNS-Passwort** dieser Domain einfügen (jede Domain hat ein eigenes)
+4. Mindestens einen **Host** angeben — `@` für die Root-Domain, sonst Subdomains wie `www`, `vpn`, `nas`. Beliebig viele Zeilen über **„+ Host hinzufügen"**.
 
 Im Listen-View danach:
 - **Toggle pro Domain** — pausiert alle Hosts dieser Domain (Eintrag wird beim nächsten Lauf übersprungen, bleibt aber gespeichert)
 - **Toggle pro Host** — pausiert nur einzelne Subdomains
-- **Bearbeiten** — Passwort ändern oder Hosts hinzufügen/entfernen
+- **Bearbeiten** — Anbieter oder Passwort ändern, Hosts hinzufügen/entfernen
 - **Löschen** — entfernt Domain inkl. Passwort komplett (History bleibt erhalten)
+
+### Anbieter: NameCheap und STRATO
+
+| | NameCheap | STRATO |
+| --- | --- | --- |
+| Protokoll | eigene API (`dynamicdns.park-your-domain.com`) | **DynDNS v2** (`dyndns.strato.com/nic/update`) |
+| Passwort herkunft | Advanced DNS → Dynamic DNS | Kundenlogin → Domain → DNS → *Dynamic DNS* aktivieren; Passwort unter *Sicherheit → Passwörter festlegen* |
+| Benutzername | entfällt | die **Paketdomain** — hier identisch mit dem Feld *Domain* |
+| Antwort bei Erfolg | XML mit `<ErrCount>0</ErrCount>` | `good <ip>` oder `nochg <ip>` |
+
+**STRATO-Voraussetzung:** DynDNS gibt es ab Paket *PowerWeb Basic 2013* bzw.
+*STRATO Domain*. Die Subdomain muss im Kundenlogin auf eigene DNS-Einträge
+stehen, sonst zeigt sie weiter auf das STRATO-Webspace.
+
+**Warum das hier gut zusammenpasst:** Der Updater sendet nur, wenn sich die IP
+gegenüber dem letzten erfolgreichen Lauf geändert hat. STRATO beantwortet zu
+häufige Updates mit `abuse` — ein Updater, der stur in jedem Intervall sendet,
+liefe genau hinein.
+
+Fehlt in einem Eintrag das Feld `provider`, gilt `namecheap`. Bestehende
+`domains.json` laufen damit unverändert weiter. Der Setup-Assistent legt
+weiterhin NameCheap-Einträge an; STRATO wird im Dashboard gewählt.
 
 Im **Failover-Bereich** zusätzlich:
 - Peer-Status live (Online/Offline, letzter Heartbeat, Fehlversuche)

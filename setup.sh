@@ -390,6 +390,7 @@ for idx in "${!COLLECTED_DOMAINS[@]}"; do
            .domains += [{
                id: $id,
                domain: ($domain | ascii_downcase),
+               provider: "namecheap",
                password: $password,
                enabled: true,
                hosts: $hosts

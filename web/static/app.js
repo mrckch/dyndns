@@ -400,7 +400,7 @@ function renderDomainsList() {
                     <span class="slider"></span>
                 </label>
                 <span class="domain-name">${escHtml(d.domain)}</span>
-                <span class="domain-meta muted">${(d.hosts || []).length} Host(s)${d.password_set ? "" : " · ⚠ kein Passwort"}</span>
+                <span class="domain-meta muted">${providerLabel(d.provider)} · ${(d.hosts || []).length} Host(s)${d.password_set ? "" : " · ⚠ kein Passwort"}</span>
                 <div class="domain-actions">
                     <button class="btn btn-sm" onclick="openDomainEditor('${d.id}')">Bearbeiten</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteDomain('${d.id}', '${escAttr(d.domain)}')">Löschen</button>
@@ -483,6 +483,9 @@ function openDomainEditor(id) {
 
     const domainInput = document.getElementById("dm-domain");
     const pwInput = document.getElementById("dm-password");
+    const providerSelect = document.getElementById("dm-provider");
+    providerSelect.value = (existing && existing.provider) || "namecheap";
+    updateProviderHint();
     domainInput.value = existing ? existing.domain : "";
     domainInput.disabled = !!existing;
     pwInput.value = "";
@@ -507,6 +510,21 @@ function closeDomainEditor() {
     editingDomainId = null;
 }
 
+function providerLabel(provider) {
+    return provider === "strato" ? "STRATO" : "NameCheap";
+}
+
+// Beide Anbieter wollen ein eigenes DynDNS-Passwort, holen es aber an
+// verschiedenen Stellen – der Hinweis sagt, wo.
+function updateProviderHint() {
+    const provider = document.getElementById("dm-provider").value;
+    const hint = document.getElementById("dm-password-hint");
+    if (!hint) return;
+    hint.textContent = provider === "strato"
+        ? "STRATO: Kundenlogin → Domain → DNS → Dynamic DNS aktivieren, Passwort unter Sicherheit → Passwörter festlegen. Benutzername ist die Paketdomain."
+        : "Pro Namecheap-Domain ein Passwort (Advanced DNS → Dynamic DNS).";
+}
+
 function addHostRow(value = "", enabled = true) {
     const container = document.getElementById("dm-hosts");
     const row = document.createElement("div");
@@ -525,6 +543,7 @@ async function submitDomain(event) {
     event.preventDefault();
     const domain = document.getElementById("dm-domain").value.trim().toLowerCase();
     const password = document.getElementById("dm-password").value;
+    const provider = document.getElementById("dm-provider").value;
     const hosts = Array.from(document.querySelectorAll("#dm-hosts .host-edit-row")).map(row => ({
         host: row.querySelector(".dm-host-input").value.trim() || "@",
         enabled: row.querySelector(".dm-host-enabled input").checked,
@@ -536,8 +555,8 @@ async function submitDomain(event) {
     }
 
     const payload = editingDomainId
-        ? { id: editingDomainId, hosts }
-        : { domain, password, enabled: true, hosts };
+        ? { id: editingDomainId, hosts, provider }
+        : { domain, password, provider, enabled: true, hosts };
 
     if (editingDomainId && password) payload.password = password;
     if (!editingDomainId && !password) {

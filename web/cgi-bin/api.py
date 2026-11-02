@@ -28,6 +28,11 @@ REALM = "DynDNS Dashboard"
 DOMAIN_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$")
 HOST_RE = re.compile(r"^[a-zA-Z0-9@._-]+$")
 
+# Unterstützte DynDNS-Anbieter. Einträge ohne Angabe gelten als "namecheap",
+# damit bestehende domains.json unverändert weiterlaufen.
+PROVIDERS = ("namecheap", "strato")
+DEFAULT_PROVIDER = "namecheap"
+
 PUBLIC_ACTIONS = {"heartbeat"}
 
 
@@ -113,6 +118,7 @@ def ensure_domains_file():
         data["domains"].append({
             "id": uuid.uuid4().hex,
             "domain": legacy_domain,
+            "provider": DEFAULT_PROVIDER,
             "password": legacy_pw,
             "enabled": True,
             "hosts": [{"host": legacy_host, "enabled": True}],
@@ -131,6 +137,7 @@ def domains_for_ui(data):
         out.append({
             "id": d.get("id", ""),
             "domain": d.get("domain", ""),
+            "provider": d.get("provider", DEFAULT_PROVIDER),
             "password_set": bool(d.get("password")),
             "enabled": bool(d.get("enabled", True)),
             "hosts": [
@@ -704,11 +711,14 @@ def handle_domain_add():
     data = _read_post_json()
     domain = (data.get("domain") or "").strip().lower()
     password = (data.get("password") or "").strip()
+    provider = (data.get("provider") or DEFAULT_PROVIDER).strip().lower()
     enabled = bool(data.get("enabled", True))
     hosts, err = _normalize_hosts(data.get("hosts", []))
 
     if not DOMAIN_RE.match(domain):
         respond("400 Bad Request", {"error": "Ungültige Domain"})
+    if provider not in PROVIDERS:
+        respond("400 Bad Request", {"error": "Unbekannter Anbieter"})
     if not password:
         respond("400 Bad Request", {"error": "DynDNS-Passwort erforderlich"})
     if err:
@@ -721,6 +731,7 @@ def handle_domain_add():
     new_entry = {
         "id": uuid.uuid4().hex,
         "domain": domain,
+        "provider": provider,
         "password": password,
         "enabled": enabled,
         "hosts": hosts,
@@ -749,6 +760,12 @@ def handle_domain_update():
                for d in store["domains"]):
             respond("409 Conflict", {"error": "Domain existiert bereits"})
         target["domain"] = domain
+
+    if "provider" in data:
+        provider = (data["provider"] or DEFAULT_PROVIDER).strip().lower()
+        if provider not in PROVIDERS:
+            respond("400 Bad Request", {"error": "Unbekannter Anbieter"})
+        target["provider"] = provider
 
     if "password" in data:
         pw = (data["password"] or "").strip()

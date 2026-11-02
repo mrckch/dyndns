@@ -63,32 +63,87 @@ get_last_ip_for() {
     sqlite3 "$DB_FILE" "SELECT new_ip FROM updates WHERE status='success' AND domain='$(sql_escape "$domain")' AND host='$(sql_escape "$host")' ORDER BY timestamp DESC LIMIT 1;" 2>/dev/null || echo ""
 }
 
+# Full name of an entry. Host "@" (oder leer) meint die Domain selbst.
+fqdn_for() {
+    local domain="$1" host="$2"
+    if [[ -z "$host" || "$host" == "@" ]]; then
+        echo "$domain"
+    else
+        echo "${host}.${domain}"
+    fi
+}
+
+# Erstes Wort einer Antwort, ohne Leerzeichen und Zeilenenden.
+first_word() {
+    local s="$1"
+    echo "${s%%[$' \t\r\n']*}"
+}
+
+# Antwort des DynDNS-v2-Protokolls (STRATO) in eine Meldung übersetzen.
+strato_error() {
+    case "$(first_word "$1")" in
+        badauth)        echo "Benutzername oder DynDNS-Passwort falsch" ;;
+        abuse)          echo "Von STRATO gesperrt – zu viele Updates" ;;
+        badsys)         echo "Ungültiger system-Parameter" ;;
+        notfqdn|nohost) echo "Subdomain bei STRATO nicht für DynDNS freigeschaltet" ;;
+        numhost)        echo "Zu viele Hostnamen in einer Anfrage" ;;
+        dnserr|911)     echo "Serverfehler bei STRATO – später erneut versuchen" ;;
+        CURL_FAILED)    echo "Keine Verbindung zu STRATO" ;;
+        *)              echo "Unerwartete Antwort: ${1:-leer}" ;;
+    esac
+}
+
 # Update one (domain, host) pair. Returns 0 on success/skip, 1 on failure.
 update_one() {
-    local domain="$1" host="$2" password="$3" new_ip="$4"
-    local old_ip response err_msg
+    local domain="$1" host="$2" password="$3" new_ip="$4" provider="${5:-namecheap}"
+    local old_ip response err_msg fqdn succeeded=1
     old_ip=$(get_last_ip_for "$domain" "$host")
+    fqdn=$(fqdn_for "$domain" "$host")
 
     if [[ "$new_ip" == "$old_ip" ]]; then
-        log_msg "SKIPPED" "$new_ip unchanged | ${host}.${domain}"
+        log_msg "SKIPPED" "$new_ip unchanged | ${fqdn}"
         db_insert "$old_ip" "$new_ip" "skipped" "" "IP unchanged" "$domain" "$host"
         return 0
     fi
 
-    response=$(curl -s --max-time 10 \
-        "https://dynamicdns.park-your-domain.com/update?host=${host}&domain=${domain}&password=${password}&ip=${new_ip}" \
-        2>/dev/null || echo "CURL_FAILED")
+    case "$provider" in
+        strato)
+            # DynDNS v2. Benutzername ist die Paketdomain, nicht die Subdomain.
+            response=$(curl -s --max-time 10 -u "${domain}:${password}" \
+                "https://dyndns.strato.com/nic/update?hostname=${fqdn}&myip=${new_ip}" \
+                2>/dev/null || echo "CURL_FAILED")
+            # DynDNS v2 antwortet mit einem Schlüsselwort, ggf. gefolgt von der IP.
+            # Nur das erste Wort zählt – "goodbye" ist kein Erfolg.
+            case "$(first_word "$response")" in
+                good|nochg) succeeded=0 ;;
+                *)          err_msg=$(strato_error "$response") ;;
+            esac
+            ;;
+        namecheap|"")
+            response=$(curl -s --max-time 10 \
+                "https://dynamicdns.park-your-domain.com/update?host=${host}&domain=${domain}&password=${password}&ip=${new_ip}" \
+                2>/dev/null || echo "CURL_FAILED")
+            if echo "$response" | grep -q '<ErrCount>0</ErrCount>'; then
+                succeeded=0
+            else
+                err_msg=$(echo "$response" | grep -oP '<Err1>\K[^<]*' || echo "Unknown error")
+            fi
+            ;;
+        *)
+            response=""
+            err_msg="Unbekannter Anbieter: $provider"
+            ;;
+    esac
 
-    if echo "$response" | grep -q '<ErrCount>0</ErrCount>'; then
-        log_msg "SUCCESS" "$old_ip -> $new_ip | ${host}.${domain}"
+    if [[ "$succeeded" -eq 0 ]]; then
+        log_msg "SUCCESS" "$old_ip -> $new_ip | ${fqdn} | $provider"
         db_insert "$old_ip" "$new_ip" "success" "$response" "IP updated successfully" "$domain" "$host"
         return 0
-    else
-        err_msg=$(echo "$response" | grep -oP '<Err1>\K[^<]*' || echo "Unknown error")
-        log_msg "FAILURE" "$old_ip -> $new_ip | ${host}.${domain} | $err_msg"
-        db_insert "$old_ip" "$new_ip" "failure" "$response" "$err_msg" "$domain" "$host"
-        return 1
     fi
+
+    log_msg "FAILURE" "$old_ip -> $new_ip | ${fqdn} | $provider | $err_msg"
+    db_insert "$old_ip" "$new_ip" "failure" "$response" "$err_msg" "$domain" "$host"
+    return 1
 }
 
 # Iterate over all enabled (domain, host) entries. Returns 0 if at least
@@ -123,17 +178,17 @@ do_update() {
 
     local total=0 ok=0 fail=0
 
-    # Build TSV stream of (domain, host, password) for all enabled host entries.
-    while IFS=$'\t' read -r domain host password; do
+    # Build TSV stream of (domain, host, password, provider) for all enabled host entries.
+    while IFS=$'\t' read -r domain host password provider; do
         [[ -z "$domain" || -z "$host" ]] && continue
         total=$((total + 1))
         if [[ -z "$password" ]]; then
-            log_msg "FAILURE" "${host}.${domain} | kein Passwort gesetzt"
+            log_msg "FAILURE" "$(fqdn_for "$domain" "$host") | kein Passwort gesetzt"
             db_insert "" "$new_ip" "failure" "" "Kein DynDNS-Passwort hinterlegt" "$domain" "$host"
             fail=$((fail + 1))
             continue
         fi
-        if update_one "$domain" "$host" "$password" "$new_ip"; then
+        if update_one "$domain" "$host" "$password" "$new_ip" "$provider"; then
             ok=$((ok + 1))
         else
             fail=$((fail + 1))
@@ -143,7 +198,7 @@ do_update() {
         | . as $d
         | .hosts[]
         | select(.enabled != false)
-        | [$d.domain, .host, $d.password] | @tsv' "$DOMAINS_FILE")
+        | [$d.domain, .host, $d.password, ($d.provider // "namecheap")] | @tsv' "$DOMAINS_FILE")
 
     log_msg "RUN" "Domains durchlaufen: ${ok}/${total} erfolgreich, ${fail} Fehler"
 
