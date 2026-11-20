@@ -30,7 +30,7 @@ HOST_RE = re.compile(r"^[a-zA-Z0-9@._-]+$")
 
 # Unterstützte DynDNS-Anbieter. Einträge ohne Angabe gelten als "namecheap",
 # damit bestehende domains.json unverändert weiterlaufen.
-PROVIDERS = ("namecheap", "strato")
+PROVIDERS = ("namecheap", "strato", "hetzner")
 DEFAULT_PROVIDER = "namecheap"
 
 PUBLIC_ACTIONS = {"heartbeat"}

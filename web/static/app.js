@@ -510,19 +510,26 @@ function closeDomainEditor() {
     editingDomainId = null;
 }
 
+const PROVIDER_LABELS = { namecheap: "NameCheap", strato: "STRATO", hetzner: "Hetzner" };
+
 function providerLabel(provider) {
-    return provider === "strato" ? "STRATO" : "NameCheap";
+    return PROVIDER_LABELS[provider] || "NameCheap";
 }
 
-// Beide Anbieter wollen ein eigenes DynDNS-Passwort, holen es aber an
-// verschiedenen Stellen – der Hinweis sagt, wo.
+// Jeder Anbieter will ein eigenes Geheimnis, holt es aber an einer anderen
+// Stelle – der Hinweis sagt, wo. Bei Hetzner ist es ein API-Token.
+const PROVIDER_HINTS = {
+    namecheap: "Pro Namecheap-Domain ein Passwort (Advanced DNS → Dynamic DNS).",
+    strato: "STRATO: Kundenlogin → Domain → DNS → Dynamic DNS aktivieren, Passwort unter Sicherheit → Passwörter festlegen. Benutzername ist die Paketdomain.",
+    hetzner: "Hetzner Console: Projekt der Zone → Sicherheit → API-Tokens, Token mit Lesen & Schreiben. Die A-Einträge der Hosts müssen in der Zone schon existieren.",
+};
+
 function updateProviderHint() {
     const provider = document.getElementById("dm-provider").value;
     const hint = document.getElementById("dm-password-hint");
-    if (!hint) return;
-    hint.textContent = provider === "strato"
-        ? "STRATO: Kundenlogin → Domain → DNS → Dynamic DNS aktivieren, Passwort unter Sicherheit → Passwörter festlegen. Benutzername ist die Paketdomain."
-        : "Pro Namecheap-Domain ein Passwort (Advanced DNS → Dynamic DNS).";
+    if (hint) hint.textContent = PROVIDER_HINTS[provider] || PROVIDER_HINTS.namecheap;
+    const label = document.getElementById("dm-password-label");
+    if (label) label.textContent = provider === "hetzner" ? "API-Token" : "DynDNS-Passwort";
 }
 
 function addHostRow(value = "", enabled = true) {

@@ -1,13 +1,13 @@
-# DynDNS Updater für NameCheap und STRATO (mit Failover)
+# DynDNS Updater für NameCheap, STRATO und Hetzner (mit Failover)
 
-Automatischer Dynamic-DNS-Updater für NameCheap- und STRATO-Domains, läuft in einem Debian/Ubuntu-LXC auf Proxmox. Aktualisiert regelmäßig den A-Record auf die aktuelle öffentliche IP und bietet ein Web-Dashboard zur Überwachung und Konfiguration.
+Automatischer Dynamic-DNS-Updater für NameCheap-, STRATO- und Hetzner-Domains, läuft in einem Debian/Ubuntu-LXC auf Proxmox. Aktualisiert regelmäßig den A-Record auf die aktuelle öffentliche IP und bietet ein Web-Dashboard zur Überwachung und Konfiguration.
 
 Optional als **Master/Failover**-Pärchen über zwei LXCs auf zwei Proxmox-Hosts: fällt der Master aus, übernimmt der Failover automatisch.
 
 ## Features
 
 - **Mehrere Domains** mit jeweils mehreren Host-Records (`@`, `www`, `vpn`, …) komplett im Dashboard pflegen — anlegen, bearbeiten, löschen, einzeln aktivieren/deaktivieren
-- **Zwei Anbieter je Domain wählbar: NameCheap und STRATO** (DynDNS v2)
+- **Drei Anbieter je Domain wählbar: NameCheap, STRATO** (DynDNS v2) **und Hetzner** (Cloud-API der Hetzner Console)
 - Update in einstellbarem Intervall (1–60 Min.), aber nur bei tatsächlicher IP-Änderung
 - IP-Auflösung über mehrere öffentliche Services (Fallback)
 - Fehler bei einer Domain blockieren die anderen nicht (pro Eintrag eigener History-Status)
@@ -125,8 +125,8 @@ Pro Namecheap-Domain wird **ein** DynDNS-Passwort hinterlegt (das aus dem Namech
 
 Im Dashboard auf **„+ Neue Domain"** klicken. Im Modal:
 1. **Domain** (z. B. `andere-domain.de`) eingeben
-2. **Anbieter** wählen — NameCheap oder STRATO
-3. **DynDNS-Passwort** dieser Domain einfügen (jede Domain hat ein eigenes)
+2. **Anbieter** wählen — NameCheap, STRATO oder Hetzner
+3. **DynDNS-Passwort** dieser Domain einfügen (jede Domain hat ein eigenes); bei Hetzner stattdessen das **API-Token**
 4. Mindestens einen **Host** angeben — `@` für die Root-Domain, sonst Subdomains wie `www`, `vpn`, `nas`. Beliebig viele Zeilen über **„+ Host hinzufügen"**.
 
 Im Listen-View danach:
@@ -153,9 +153,30 @@ gegenüber dem letzten erfolgreichen Lauf geändert hat. STRATO beantwortet zu
 häufige Updates mit `abuse` — ein Updater, der stur in jedem Intervall sendet,
 liefe genau hinein.
 
+### Anbieter: Hetzner
+
+Für Zonen, die in der **Hetzner Console** verwaltet werden — auch Domains aus
+dem Hetzner-Webhosting (konsoleH, Nameserver `ns1.your-server.de`): deren
+„Zone bearbeiten" führt in die Hetzner Console.
+
+| | Hetzner |
+| --- | --- |
+| Protokoll | Cloud-API: `POST https://api.hetzner.cloud/v1/zones/<domain>/rrsets/<host>/A/actions/set_records` |
+| Geheimnis | **API-Token** des Projekts, in dem die Zone liegt: Hetzner Console → Projekt → *Sicherheit → API-Tokens*, Berechtigung *Lesen & Schreiben*. Es wird im Feld *API-Token* (in `domains.json`: `password`) hinterlegt |
+| Antwort bei Erfolg | HTTP `201` |
+
+- Der Updater **überschreibt nur vorhandene A-Einträge**. Jeder Host (`@`,
+  `www`, …) muss in der Zone schon als A-Eintrag existieren, sonst meldet der
+  Lauf „Zone oder A-Eintrag bei Hetzner nicht gefunden". Die TTL bleibt, wie sie
+  in der Zone steht — für DynDNS empfiehlt sich ein kleiner Wert (z. B. 300).
+- Das Token gilt für das **ganze Projekt**, nicht nur für DNS. Wer das
+  eingrenzen will, legt die Zone in ein eigenes Projekt.
+- Das Token wird `curl` über die Standardeingabe übergeben und taucht nicht in
+  der Prozessliste auf.
+
 Fehlt in einem Eintrag das Feld `provider`, gilt `namecheap`. Bestehende
 `domains.json` laufen damit unverändert weiter. Der Setup-Assistent legt
-weiterhin NameCheap-Einträge an; STRATO wird im Dashboard gewählt.
+weiterhin NameCheap-Einträge an; STRATO und Hetzner werden im Dashboard gewählt.
 
 Im **Failover-Bereich** zusätzlich:
 - Peer-Status live (Online/Offline, letzter Heartbeat, Fehlversuche)
@@ -206,7 +227,7 @@ Beim ersten Aufruf des Dashboards oder des `setup.sh` nach einem Update wird ein
 
 ## Sicherheit
 
-- Konfigurationsdateien (inkl. NameCheap-Passwörter in `domains.json` und Peer-Token in `config.env`) liegen unter `/etc/dyndns/` mit `0640 root:www-data`.
+- Konfigurationsdateien (inkl. DynDNS-Passwörter und Hetzner-API-Tokens in `domains.json` und Peer-Token in `config.env`) liegen unter `/etc/dyndns/` mit `0640 root:www-data`.
 - Heartbeat-Endpunkt (`/peer/heartbeat.py`) ist nur per geheimem Token erreichbar (Konstantzeit-Vergleich, `secrets.compare_digest`).
 - Web-Dashboard kann optional mit HTTP Digest Auth abgesichert werden.
 - Der Heartbeat-Pfad ist auch bei aktivierter Web-Auth ohne Browser-Login erreichbar (sonst könnte der Failover den Master nicht prüfen) – die Absicherung erfolgt allein über den Token.

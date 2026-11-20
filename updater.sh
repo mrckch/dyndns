@@ -16,6 +16,8 @@ source "$CONFIG_FILE"
 
 ROLE="${DYNDNS_ROLE:-single}"
 FAILOVER_THRESHOLD="${DYNDNS_FAILOVER_THRESHOLD:-3}"
+# Basis-URL der Hetzner-Cloud-API. Nur für Tests überschreibbar.
+HETZNER_API="${DYNDNS_HETZNER_API:-https://api.hetzner.cloud/v1}"
 
 log_msg() {
     local timestamp
@@ -93,10 +95,27 @@ strato_error() {
     esac
 }
 
+# Antwort der Hetzner-Cloud-API in eine Meldung übersetzen.
+# $1 = HTTP-Status (oder CURL_FAILED), $2 = Antwort-Body (JSON).
+hetzner_error() {
+    local http_code="$1" body="$2" code="" message=""
+    code=$(jq -r '.error.code // empty' <<<"$body" 2>/dev/null || true)
+    message=$(jq -r '.error.message // empty' <<<"$body" 2>/dev/null || true)
+    case "$http_code" in
+        CURL_FAILED|000|"") echo "Keine Verbindung zu Hetzner" ;;
+        401) echo "Hetzner-API-Token ungültig" ;;
+        403) echo "Hetzner-API-Token ohne Schreibrecht${code:+ ($code)}" ;;
+        404) echo "Zone oder A-Eintrag bei Hetzner nicht gefunden – der Eintrag muss in der Zone bereits existieren" ;;
+        429) echo "Zu viele Anfragen an Hetzner – später erneut versuchen" ;;
+        5??) echo "Serverfehler bei Hetzner (HTTP $http_code) – später erneut versuchen" ;;
+        *)   echo "Hetzner HTTP $http_code: ${message:-${code:-unerwartete Antwort}}" ;;
+    esac
+}
+
 # Update one (domain, host) pair. Returns 0 on success/skip, 1 on failure.
 update_one() {
     local domain="$1" host="$2" password="$3" new_ip="$4" provider="${5:-namecheap}"
-    local old_ip response err_msg fqdn succeeded=1
+    local old_ip response err_msg fqdn http_code succeeded=1
     old_ip=$(get_last_ip_for "$domain" "$host")
     fqdn=$(fqdn_for "$domain" "$host")
 
@@ -118,6 +137,35 @@ update_one() {
                 good|nochg) succeeded=0 ;;
                 *)          err_msg=$(strato_error "$response") ;;
             esac
+            ;;
+        hetzner)
+            # Hetzner Console (Cloud-API): die Records des vorhandenen A-RRSets
+            # überschreiben. Die Zone wird über den Domainnamen angesprochen,
+            # "@" steht für die Domain selbst. Das Token geht über stdin an curl
+            # (-H @-), damit es nicht in der Prozessliste steht.
+            response=$(printf 'Authorization: Bearer %s\n' "$password" \
+                | curl -s --max-time 10 -X POST \
+                    -H @- -H "Content-Type: application/json" \
+                    -d "{\"records\":[{\"value\":\"${new_ip}\"}]}" \
+                    -w '\n%{http_code}' \
+                    "${HETZNER_API}/zones/${domain}/rrsets/${host:-@}/A/actions/set_records" \
+                2>/dev/null || echo "CURL_FAILED")
+            # Letzte Zeile ist der HTTP-Status, davor der Body. Scheitert curl
+            # selbst, hängt CURL_FAILED direkt hinter dem Status "000".
+            http_code="${response##*$'\n'}"
+            if [[ "$response" == *CURL_FAILED ]]; then
+                http_code="CURL_FAILED"
+                response=""
+            elif [[ "$response" == *$'\n'* ]]; then
+                response="${response%$'\n'*}"
+            else
+                response=""
+            fi
+            if [[ "$http_code" == "201" ]]; then
+                succeeded=0
+            else
+                err_msg=$(hetzner_error "$http_code" "$response")
+            fi
             ;;
         namecheap|"")
             response=$(curl -s --max-time 10 \
